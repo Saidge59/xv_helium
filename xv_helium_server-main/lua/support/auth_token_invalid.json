@@ -1,0 +1,16 @@
+"version": 1,
+"auth_token_public_keys": [
+   {
+      "path": "/path/to/public_key1.pem",
+      "audiences": [
+         "xv-vpn-server-1",
+         "xv-dip-server-1"
+      ]
+   },
+   {
+      "path": "/path/to/public_key2.pem",
+      "audiences": [
+         "cg-server"
+      ]
+   }
+]

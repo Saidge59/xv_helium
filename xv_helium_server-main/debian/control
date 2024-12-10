@@ -1,0 +1,30 @@
+Source: helium-server
+Maintainer: ExpressVPN <nobody@expressvpn.com>
+Section: misc
+Priority: optional
+Standards-Version: 3.9.2
+Build-Depends: autoconf,
+ automake,
+ cmake,
+ debhelper (>= 9),
+ git,
+ libreadline-dev,
+ libtool,
+ liblua5.3-dev,
+ lua5.3,
+ luarocks (>= 3.3.1),
+ hpt (>= 1.7),
+ rubygems,
+ wget
+
+Package: helium-server
+Architecture: any
+#Depends: ${shlibs:Depends}, ${misc:Depends},
+Depends:
+ hpt-dkms,
+ libsqlite3-dev,
+ libssl-dev,
+ luarocks (>= 3.3.1),
+Description: Fast, lightweight VPN server from ExpressVPN
+ This package contains Helium, a high-performance, secure and lightweight VPN
+ server component for road-warrior style VPN clients.

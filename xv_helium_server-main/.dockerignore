@@ -1,0 +1,3 @@
+# Note that third_party is not included here, see README.md
+build/
+.git/

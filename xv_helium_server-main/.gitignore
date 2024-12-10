@@ -1,0 +1,6 @@
+build/
+third_party/
+debian/.debhelper/
+artifacts/
+.vscode/
+src/version.gen.h

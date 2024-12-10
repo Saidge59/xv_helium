@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+set -eo pipefail
+
+TEST_CASES=${1:-"all"}
+
+mkdir -p build/test
+/usr/local/bin/ceedling verbosity[4] test:$TEST_CASES | tee build/test/test-results.out

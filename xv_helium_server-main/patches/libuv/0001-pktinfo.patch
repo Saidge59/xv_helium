@@ -1,0 +1,1530 @@
+From b3ce100333b7f86cd2a473c34c0379f6605954f9 Mon Sep 17 00:00:00 2001
+From: Tom L <tom.li@expressvpn.com>
+Date: Fri, 29 Dec 2023 10:37:22 +0800
+Subject: [PATCH 1/6] linux: support getting destination address in udp recv
+ callbacks
+
+---
+ include/uv.h                     |  7 ++-
+ include/uv/unix.h                |  1 +
+ src/unix/udp.c                   | 80 ++++++++++++++++++++++++++++----
+ test/benchmark-ping-udp.c        |  1 +
+ test/benchmark-udp-pummel.c      |  1 +
+ test/echo-server.c               |  1 +
+ test/test-getsockname.c          |  1 +
+ test/test-list.h                 |  2 +
+ test/test-udp-alloc-cb-fail.c    |  2 +
+ test/test-udp-connect.c          |  1 +
+ test/test-udp-connect6.c         |  1 +
+ test/test-udp-ipv6.c             |  2 +
+ test/test-udp-mmsg.c             | 55 ++++++++++++++++++++++
+ test/test-udp-multicast-join.c   |  1 +
+ test/test-udp-multicast-join6.c  |  1 +
+ test/test-udp-open.c             |  1 +
+ test/test-udp-recv-in-a-row.c    |  1 +
+ test/test-udp-send-and-recv.c    |  2 +
+ test/test-udp-send-immediate.c   |  1 +
+ test/test-udp-send-unreachable.c |  1 +
+ test/test-udp-try-send.c         |  1 +
+ test/test-watcher-cross-stop.c   |  1 +
+ 22 files changed, 156 insertions(+), 9 deletions(-)
+
+diff --git a/include/uv.h b/include/uv.h
+index 5642101c..c431b169 100644
+--- a/include/uv.h
++++ b/include/uv.h
+@@ -671,6 +671,10 @@ enum uv_udp_flags {
+    * This flag is no-op on platforms other than Linux.
+    */
+   UV_UDP_LINUX_RECVERR = 32,
++  /*
++   * Indicates that packet info (PKTINFO) should be enabled when receiving messages.
++   */
++  UV_UDP_PKTINFO = 128,
+   /*
+    * Indicates that recvmmsg should be used, if available.
+    */
+@@ -681,7 +685,8 @@ typedef void (*uv_udp_send_cb)(uv_udp_send_t* req, int status);
+ typedef void (*uv_udp_recv_cb)(uv_udp_t* handle,
+                                ssize_t nread,
+                                const uv_buf_t* buf,
+-                               const struct sockaddr* addr,
++                               const struct sockaddr* src,
++                               const struct sockaddr* dst,
+                                unsigned flags);
+ 
+ /* uv_udp_t is a subclass of uv_handle_t. */
+diff --git a/include/uv/unix.h b/include/uv/unix.h
+index 09f88a56..0aad3761 100644
+--- a/include/uv/unix.h
++++ b/include/uv/unix.h
+@@ -302,6 +302,7 @@ typedef struct {
+   uv__io_t io_watcher;                                                        \
+   struct uv__queue write_queue;                                               \
+   struct uv__queue write_completed_queue;                                     \
++  unsigned int udp_flags;
+ 
+ #define UV_PIPE_PRIVATE_FIELDS                                                \
+   const char* pipe_fname; /* NULL or strdup'ed */
+diff --git a/src/unix/udp.c b/src/unix/udp.c
+index c2814512..6df0d09b 100644
+--- a/src/unix/udp.c
++++ b/src/unix/udp.c
+@@ -31,6 +31,8 @@
+ #include <xti.h>
+ #endif
+ #include <sys/un.h>
++#include <sys/socket.h>
++#include <netinet/in.h>
+ 
+ #if defined(IPV6_JOIN_GROUP) && !defined(IPV6_ADD_MEMBERSHIP)
+ # define IPV6_ADD_MEMBERSHIP IPV6_JOIN_GROUP
+@@ -147,11 +149,14 @@ static void uv__udp_io(uv_loop_t* loop, uv__io_t* w, unsigned int revents) {
+   }
+ }
+ 
++#define CMBUF_SIZE 0x100
++
+ static int uv__udp_recvmmsg(uv_udp_t* handle, uv_buf_t* buf) {
+ #if defined(__linux__) || defined(__FreeBSD__)
+   struct sockaddr_in6 peers[20];
+   struct iovec iov[ARRAY_SIZE(peers)];
+   struct mmsghdr msgs[ARRAY_SIZE(peers)];
++  char cmbufs[CMBUF_SIZE * ARRAY_SIZE(peers)] = {0};
+   ssize_t nread;
+   uv_buf_t chunk_buf;
+   size_t chunks;
+@@ -173,6 +178,11 @@ static int uv__udp_recvmmsg(uv_udp_t* handle, uv_buf_t* buf) {
+     msgs[k].msg_hdr.msg_control = NULL;
+     msgs[k].msg_hdr.msg_controllen = 0;
+     msgs[k].msg_hdr.msg_flags = 0;
++
++    if(handle->udp_flags & UV_UDP_PKTINFO) {
++      msgs[k].msg_hdr.msg_control = (void *)&cmbufs[k * CMBUF_SIZE];
++      msgs[k].msg_hdr.msg_controllen = CMBUF_SIZE;
++    }
+   }
+ 
+   do
+@@ -181,9 +191,9 @@ static int uv__udp_recvmmsg(uv_udp_t* handle, uv_buf_t* buf) {
+ 
+   if (nread < 1) {
+     if (nread == 0 || errno == EAGAIN || errno == EWOULDBLOCK)
+-      handle->recv_cb(handle, 0, buf, NULL, 0);
++      handle->recv_cb(handle, 0, buf, NULL, NULL, 0);
+     else
+-      handle->recv_cb(handle, UV__ERR(errno), buf, NULL, 0);
++      handle->recv_cb(handle, UV__ERR(errno), buf, NULL, NULL, 0);
+   } else {
+     /* pass each chunk to the application */
+     for (k = 0; k < (size_t) nread && handle->recv_cb != NULL; k++) {
+@@ -191,17 +201,34 @@ static int uv__udp_recvmmsg(uv_udp_t* handle, uv_buf_t* buf) {
+       if (msgs[k].msg_hdr.msg_flags & MSG_TRUNC)
+         flags |= UV_UDP_PARTIAL;
+ 
++      struct sockaddr_in dst_peer = {0};
++      if (handle->udp_flags & UV_UDP_PKTINFO) {
++        struct msghdr* h = &msgs[k].msg_hdr;
++        struct cmsghdr* cmsg = CMSG_FIRSTHDR(h);
++        for (; cmsg != NULL; cmsg = CMSG_NXTHDR(h, cmsg)) {
++          /* Ignore all non-pktinfo messages */
++          if(cmsg->cmsg_level != IPPROTO_IP || cmsg->cmsg_type != IP_PKTINFO) {
++            continue;
++          }
++          struct in_pktinfo *pi = (struct in_pktinfo *)CMSG_DATA(cmsg);
++          dst_peer.sin_family = AF_INET;
++          dst_peer.sin_addr.s_addr = pi->ipi_spec_dst.s_addr;
++          break;
++        }
++      }
++
+       chunk_buf = uv_buf_init(iov[k].iov_base, iov[k].iov_len);
+       handle->recv_cb(handle,
+                       msgs[k].msg_len,
+                       &chunk_buf,
+                       msgs[k].msg_hdr.msg_name,
++                      (const struct sockaddr*)&dst_peer,
+                       flags);
+     }
+ 
+     /* one last callback so the original buffer is freed */
+     if (handle->recv_cb != NULL)
+-      handle->recv_cb(handle, 0, buf, NULL, UV_UDP_MMSG_FREE);
++      handle->recv_cb(handle, 0, buf, NULL, NULL, UV_UDP_MMSG_FREE);
+   }
+   return nread;
+ #else  /* __linux__ || ____FreeBSD__ */
+@@ -211,12 +238,17 @@ static int uv__udp_recvmmsg(uv_udp_t* handle, uv_buf_t* buf) {
+ 
+ static void uv__udp_recvmsg(uv_udp_t* handle) {
+   struct sockaddr_storage peer;
++  struct sockaddr_storage dst_peer;
+   struct msghdr h;
+   ssize_t nread;
+   uv_buf_t buf;
+   int flags;
+   int count;
+ 
++  /* Buffer for pktinfo control messages */
++  char cmbuf[1024] = {0};
++  struct cmsghdr* cmsg = NULL;
++
+   assert(handle->recv_cb != NULL);
+   assert(handle->alloc_cb != NULL);
+ 
+@@ -229,7 +261,7 @@ static void uv__udp_recvmsg(uv_udp_t* handle) {
+     buf = uv_buf_init(NULL, 0);
+     handle->alloc_cb((uv_handle_t*) handle, UV__UDP_DGRAM_MAXSIZE, &buf);
+     if (buf.base == NULL || buf.len == 0) {
+-      handle->recv_cb(handle, UV_ENOBUFS, &buf, NULL, 0);
++      handle->recv_cb(handle, UV_ENOBUFS, &buf, NULL, NULL, 0);
+       return;
+     }
+     assert(buf.base != NULL);
+@@ -248,6 +280,11 @@ static void uv__udp_recvmsg(uv_udp_t* handle) {
+     h.msg_iov = (void*) &buf;
+     h.msg_iovlen = 1;
+ 
++    if(handle->udp_flags & UV_UDP_PKTINFO) {
++      h.msg_control = (void *)cmbuf;
++      h.msg_controllen = sizeof(cmbuf);
++    }
++
+     do {
+       nread = recvmsg(handle->io_watcher.fd, &h, 0);
+     }
+@@ -255,16 +292,31 @@ static void uv__udp_recvmsg(uv_udp_t* handle) {
+ 
+     if (nread == -1) {
+       if (errno == EAGAIN || errno == EWOULDBLOCK)
+-        handle->recv_cb(handle, 0, &buf, NULL, 0);
++        handle->recv_cb(handle, 0, &buf, NULL, NULL, 0);
+       else
+-        handle->recv_cb(handle, UV__ERR(errno), &buf, NULL, 0);
++        handle->recv_cb(handle, UV__ERR(errno), &buf, NULL, NULL, 0);
+     }
+     else {
+       flags = 0;
+       if (h.msg_flags & MSG_TRUNC)
+         flags |= UV_UDP_PARTIAL;
+ 
+-      handle->recv_cb(handle, nread, &buf, (const struct sockaddr*) &peer, flags);
++      if (handle->udp_flags & UV_UDP_PKTINFO) {
++        cmsg = CMSG_FIRSTHDR(&h);
++        for (; cmsg != NULL; cmsg = CMSG_NXTHDR(&h, cmsg)) {
++          /* Ignore all non-pktinfo messages */
++          if(cmsg->cmsg_level != IPPROTO_IP || cmsg->cmsg_type != IP_PKTINFO) {
++            continue;
++          }
++          struct in_pktinfo *pi = (struct in_pktinfo *)CMSG_DATA(cmsg);
++          struct sockaddr_in dst = {0};
++          dst.sin_family = AF_INET;
++          dst.sin_addr.s_addr = pi->ipi_spec_dst.s_addr;
++          memcpy(&dst_peer, &dst, sizeof(dst));
++          break;
++        }
++      }
++      handle->recv_cb(handle, nread, &buf, (const struct sockaddr*)&peer, (const struct sockaddr*)&dst_peer, flags);
+     }
+     count--;
+   }
+@@ -492,7 +544,7 @@ int uv__udp_bind(uv_udp_t* handle,
+   int fd;
+ 
+   /* Check for bad flags. */
+-  if (flags & ~(UV_UDP_IPV6ONLY | UV_UDP_REUSEADDR | UV_UDP_LINUX_RECVERR))
++  if (flags & ~(UV_UDP_IPV6ONLY | UV_UDP_REUSEADDR | UV_UDP_LINUX_RECVERR | UV_UDP_PKTINFO))
+     return UV_EINVAL;
+ 
+   /* Cannot set IPv6-only mode on non-IPv6 socket. */
+@@ -533,6 +585,17 @@ int uv__udp_bind(uv_udp_t* handle,
+ #endif
+   }
+ 
++#if defined(__linux__)
++  if (flags & UV_UDP_PKTINFO) {
++    yes = 1;
++    if (setsockopt(fd, IPPROTO_IP, IP_PKTINFO, &yes, sizeof yes) == -1) {
++      err = UV__ERR(errno);
++      return err;
++    }
++    handle->udp_flags |= UV_UDP_PKTINFO;
++  }
++#endif
++
+   if (bind(fd, addr, addrlen)) {
+     err = UV__ERR(errno);
+     if (errno == EAFNOSUPPORT)
+@@ -1006,6 +1069,7 @@ int uv__udp_init_ex(uv_loop_t* loop,
+   handle->recv_cb = NULL;
+   handle->send_queue_size = 0;
+   handle->send_queue_count = 0;
++  handle->udp_flags = 0;
+   uv__io_init(&handle->io_watcher, uv__udp_io, fd);
+   uv__queue_init(&handle->write_queue);
+   uv__queue_init(&handle->write_completed_queue);
+diff --git a/test/benchmark-ping-udp.c b/test/benchmark-ping-udp.c
+index 2d2fe9c6..76400460 100644
+--- a/test/benchmark-ping-udp.c
++++ b/test/benchmark-ping-udp.c
+@@ -89,6 +89,7 @@ static void pinger_read_cb(uv_udp_t* udp,
+                            ssize_t nread,
+                            const uv_buf_t* buf,
+                            const struct sockaddr* addr,
++                           const struct sockaddr* dst,
+                            unsigned flags) {
+   ssize_t i;
+   pinger_t* pinger;
+diff --git a/test/benchmark-udp-pummel.c b/test/benchmark-udp-pummel.c
+index 7b7e1afa..d59e5978 100644
+--- a/test/benchmark-udp-pummel.c
++++ b/test/benchmark-udp-pummel.c
+@@ -110,6 +110,7 @@ static void recv_cb(uv_udp_t* handle,
+                     ssize_t nread,
+                     const uv_buf_t* buf,
+                     const struct sockaddr* addr,
++                    const struct sockaddr* dst,
+                     unsigned flags) {
+   if (nread == 0)
+     return;
+diff --git a/test/echo-server.c b/test/echo-server.c
+index 572f87df..ef18550d 100644
+--- a/test/echo-server.c
++++ b/test/echo-server.c
+@@ -230,6 +230,7 @@ static void on_recv(uv_udp_t* handle,
+                     ssize_t nread,
+                     const uv_buf_t* rcvbuf,
+                     const struct sockaddr* addr,
++                    const struct sockaddr* dst,
+                     unsigned flags) {
+   uv_buf_t sndbuf;
+   uv_udp_send_t* req;
+diff --git a/test/test-getsockname.c b/test/test-getsockname.c
+index 7bc0ba2e..104ed3bb 100644
+--- a/test/test-getsockname.c
++++ b/test/test-getsockname.c
+@@ -240,6 +240,7 @@ static void udp_recv(uv_udp_t* handle,
+                      ssize_t nread,
+                      const uv_buf_t* buf,
+                      const struct sockaddr* addr,
++                     const struct sockaddr* dst,
+                      unsigned flags) {
+   struct sockaddr sockname;
+   int namelen;
+diff --git a/test/test-list.h b/test/test-list.h
+index d112d07a..8ea46e48 100644
+--- a/test/test-list.h
++++ b/test/test-list.h
+@@ -173,6 +173,7 @@ TEST_DECLARE   (udp_send_hang_loop)
+ TEST_DECLARE   (udp_send_immediate)
+ TEST_DECLARE   (udp_send_unreachable)
+ TEST_DECLARE   (udp_mmsg)
++TEST_DECLARE   (udp_mmsg_with_pktinfo)
+ TEST_DECLARE   (udp_multicast_join)
+ TEST_DECLARE   (udp_multicast_join6)
+ TEST_DECLARE   (udp_multicast_ttl)
+@@ -787,6 +788,7 @@ TASK_LIST_START
+   TEST_ENTRY  (udp_options6)
+   TEST_ENTRY  (udp_no_autobind)
+   TEST_ENTRY  (udp_mmsg)
++  TEST_ENTRY  (udp_mmsg_with_pktinfo)
+   TEST_ENTRY  (udp_multicast_interface)
+   TEST_ENTRY  (udp_multicast_interface6)
+   TEST_ENTRY  (udp_multicast_join)
+diff --git a/test/test-udp-alloc-cb-fail.c b/test/test-udp-alloc-cb-fail.c
+index ae4bbee3..7cbd565f 100644
+--- a/test/test-udp-alloc-cb-fail.c
++++ b/test/test-udp-alloc-cb-fail.c
+@@ -69,6 +69,7 @@ static void cl_recv_cb(uv_udp_t* handle,
+                        ssize_t nread,
+                        const uv_buf_t* buf,
+                        const struct sockaddr* addr,
++                       const struct sockaddr* dst,
+                        unsigned flags) {
+   CHECK_HANDLE(handle);
+   ASSERT_OK(flags);
+@@ -110,6 +111,7 @@ static void sv_recv_cb(uv_udp_t* handle,
+                        ssize_t nread,
+                        const uv_buf_t* rcvbuf,
+                        const struct sockaddr* addr,
++                       const struct sockaddr* dst,
+                        unsigned flags) {
+   uv_udp_send_t* req;
+   uv_buf_t sndbuf;
+diff --git a/test/test-udp-connect.c b/test/test-udp-connect.c
+index 88314acc..388dd3ff 100644
+--- a/test/test-udp-connect.c
++++ b/test/test-udp-connect.c
+@@ -84,6 +84,7 @@ static void sv_recv_cb(uv_udp_t* handle,
+                        ssize_t nread,
+                        const uv_buf_t* rcvbuf,
+                        const struct sockaddr* addr,
++                       const struct sockaddr* dst,
+                        unsigned flags) {
+   if (nread > 0) {
+     ASSERT_EQ(4, nread);
+diff --git a/test/test-udp-connect6.c b/test/test-udp-connect6.c
+index bbc4033c..df718a22 100644
+--- a/test/test-udp-connect6.c
++++ b/test/test-udp-connect6.c
+@@ -84,6 +84,7 @@ static void sv_recv_cb(uv_udp_t* handle,
+                        ssize_t nread,
+                        const uv_buf_t* rcvbuf,
+                        const struct sockaddr* addr,
++                       const struct sockaddr* dst,
+                        unsigned flags) {
+   if (nread > 0) {
+     ASSERT_EQ(4, nread);
+diff --git a/test/test-udp-ipv6.c b/test/test-udp-ipv6.c
+index 8ad80b9b..50a9c7f7 100644
+--- a/test/test-udp-ipv6.c
++++ b/test/test-udp-ipv6.c
+@@ -110,6 +110,7 @@ static void ipv6_recv_fail(uv_udp_t* handle,
+                            ssize_t nread,
+                            const uv_buf_t* buf,
+                            const struct sockaddr* addr,
++                           const struct sockaddr* dst,
+                            unsigned flags) {
+   printf("got %d %.*s\n", (int) nread, nread > 0 ? (int) nread : 0, buf->base);
+   if (!is_from_client(addr) || (nread == 0 && addr == NULL))
+@@ -122,6 +123,7 @@ static void ipv6_recv_ok(uv_udp_t* handle,
+                          ssize_t nread,
+                          const uv_buf_t* buf,
+                          const struct sockaddr* addr,
++                         const struct sockaddr* dst,
+                          unsigned flags) {
+   CHECK_HANDLE(handle);
+ 
+diff --git a/test/test-udp-mmsg.c b/test/test-udp-mmsg.c
+index c0e000b9..dbbd1923 100644
+--- a/test/test-udp-mmsg.c
++++ b/test/test-udp-mmsg.c
+@@ -72,6 +72,7 @@ static void recv_cb(uv_udp_t* handle,
+                     ssize_t nread,
+                     const uv_buf_t* rcvbuf,
+                     const struct sockaddr* addr,
++                    const struct sockaddr* dst,
+                     unsigned flags) {
+   ASSERT_GE(nread, 0);
+ 
+@@ -91,6 +92,16 @@ static void recv_cb(uv_udp_t* handle,
+     ASSERT_NOT_NULL(addr);
+     ASSERT_MEM_EQ("PING", rcvbuf->base, nread);
+     received_datagrams++;
++
++#if defined(__linux__)
++  if (handle->udp_flags & UV_UDP_PKTINFO) {
++    ASSERT_NOT_NULL(dst);
++    ASSERT_EQ(AF_INET, dst->sa_family);
++    char dst_ip[100] = {0};
++    ASSERT_OK(uv_ip4_name((const struct sockaddr_in *)dst, dst_ip, sizeof(dst_ip)));
++    ASSERT_STR_EQ("127.0.0.1", dst_ip);
++  }
++#endif
+   }
+ 
+   recv_cb_called++;
+@@ -147,3 +158,47 @@ TEST_IMPL(udp_mmsg) {
+   MAKE_VALGRIND_HAPPY(uv_default_loop());
+   return 0;
+ }
++
++
++TEST_IMPL(udp_mmsg_with_pktinfo) {
++  struct sockaddr_in addr;
++  uv_buf_t buf;
++  int i;
++
++  ASSERT_OK(uv_ip4_addr("0.0.0.0", TEST_PORT, &addr));
++
++  ASSERT_OK(uv_udp_init_ex(uv_default_loop(), &recver,
++                           AF_UNSPEC | UV_UDP_RECVMMSG));
++
++  ASSERT_OK(uv_udp_bind(&recver, (const struct sockaddr*) &addr, UV_UDP_PKTINFO));
++
++  ASSERT_OK(uv_udp_recv_start(&recver, alloc_cb, recv_cb));
++
++  ASSERT_OK(uv_ip4_addr("127.0.0.1", TEST_PORT, &addr));
++
++  ASSERT_OK(uv_udp_init(uv_default_loop(), &sender));
++
++  buf = uv_buf_init("PING", 4);
++  for (i = 0; i < NUM_SENDS; i++) {
++    ASSERT_EQ(4, uv_udp_try_send(&sender, &buf, 1, (const struct sockaddr*) &addr));
++  }
++
++  ASSERT_OK(uv_run(uv_default_loop(), UV_RUN_DEFAULT));
++
++  ASSERT_EQ(2, close_cb_called);
++  ASSERT_EQ(received_datagrams, NUM_SENDS);
++
++  ASSERT_OK(sender.send_queue_size);
++  ASSERT_OK(recver.send_queue_size);
++
++  printf("%d allocs for %d recvs\n", alloc_cb_called, recv_cb_called);
++
++  /* On platforms that don't support mmsg, each recv gets its own alloc */
++  if (uv_udp_using_recvmmsg(&recver))
++    ASSERT_EQ(alloc_cb_called, EXPECTED_MMSG_ALLOCS);
++  else
++    ASSERT_EQ(alloc_cb_called, recv_cb_called);
++
++  MAKE_VALGRIND_HAPPY(uv_default_loop());
++  return 0;
++}
+diff --git a/test/test-udp-multicast-join.c b/test/test-udp-multicast-join.c
+index 7e8fbe39..ed399ac0 100644
+--- a/test/test-udp-multicast-join.c
++++ b/test/test-udp-multicast-join.c
+@@ -93,6 +93,7 @@ static void cl_recv_cb(uv_udp_t* handle,
+                        ssize_t nread,
+                        const uv_buf_t* buf,
+                        const struct sockaddr* addr,
++                       const struct sockaddr* dst,
+                        unsigned flags) {
+   CHECK_HANDLE(handle);
+   ASSERT_OK(flags);
+diff --git a/test/test-udp-multicast-join6.c b/test/test-udp-multicast-join6.c
+index 11efb0a6..23e028f3 100644
+--- a/test/test-udp-multicast-join6.c
++++ b/test/test-udp-multicast-join6.c
+@@ -104,6 +104,7 @@ static void cl_recv_cb(uv_udp_t* handle,
+                        ssize_t nread,
+                        const uv_buf_t* buf,
+                        const struct sockaddr* addr,
++                       const struct sockaddr* dst,
+                        unsigned flags) {
+   CHECK_HANDLE(handle);
+   ASSERT_OK(flags);
+diff --git a/test/test-udp-open.c b/test/test-udp-open.c
+index 6fddc937..316eb8fd 100644
+--- a/test/test-udp-open.c
++++ b/test/test-udp-open.c
+@@ -100,6 +100,7 @@ static void recv_cb(uv_udp_t* handle,
+                        ssize_t nread,
+                        const uv_buf_t* buf,
+                        const struct sockaddr* addr,
++                       const struct sockaddr* dst,
+                        unsigned flags) {
+   int r;
+ 
+diff --git a/test/test-udp-recv-in-a-row.c b/test/test-udp-recv-in-a-row.c
+index 30745def..cb671cb1 100644
+--- a/test/test-udp-recv-in-a-row.c
++++ b/test/test-udp-recv-in-a-row.c
+@@ -49,6 +49,7 @@ static void sv_recv_cb(uv_udp_t* handle,
+                        ssize_t nread,
+                        const uv_buf_t* rcvbuf,
+                        const struct sockaddr* addr,
++                       const struct sockaddr* dst,
+                        unsigned flags) {
+   if (++ recv_cnt < N) {
+     ASSERT_EQ(sizeof(send_data), nread);
+diff --git a/test/test-udp-send-and-recv.c b/test/test-udp-send-and-recv.c
+index b24fe1d0..652dcd4a 100644
+--- a/test/test-udp-send-and-recv.c
++++ b/test/test-udp-send-and-recv.c
+@@ -63,6 +63,7 @@ static void cl_recv_cb(uv_udp_t* handle,
+                        ssize_t nread,
+                        const uv_buf_t* buf,
+                        const struct sockaddr* addr,
++                       const struct sockaddr* dst,
+                        unsigned flags) {
+   CHECK_HANDLE(handle);
+   ASSERT_OK(flags);
+@@ -117,6 +118,7 @@ static void sv_recv_cb(uv_udp_t* handle,
+                        ssize_t nread,
+                        const uv_buf_t* rcvbuf,
+                        const struct sockaddr* addr,
++                       const struct sockaddr* dst,
+                        unsigned flags) {
+   uv_udp_send_t* req;
+   uv_buf_t sndbuf;
+diff --git a/test/test-udp-send-immediate.c b/test/test-udp-send-immediate.c
+index 8e7f83ff..7ce159a3 100644
+--- a/test/test-udp-send-immediate.c
++++ b/test/test-udp-send-immediate.c
+@@ -68,6 +68,7 @@ static void sv_recv_cb(uv_udp_t* handle,
+                        ssize_t nread,
+                        const uv_buf_t* rcvbuf,
+                        const struct sockaddr* addr,
++                       const struct sockaddr* dst,
+                        unsigned flags) {
+   if (nread < 0) {
+     ASSERT(0 && "unexpected error");
+diff --git a/test/test-udp-send-unreachable.c b/test/test-udp-send-unreachable.c
+index 0a2f4a47..8dfb1d31 100644
+--- a/test/test-udp-send-unreachable.c
++++ b/test/test-udp-send-unreachable.c
+@@ -78,6 +78,7 @@ static void recv_cb(uv_udp_t* handle,
+                        ssize_t nread,
+                        const uv_buf_t* rcvbuf,
+                        const struct sockaddr* addr,
++                       const struct sockaddr* dst,
+                        unsigned flags) {
+   CHECK_HANDLE(handle);
+   recv_cb_called++;
+diff --git a/test/test-udp-try-send.c b/test/test-udp-try-send.c
+index 0c76fb1c..9e693697 100644
+--- a/test/test-udp-try-send.c
++++ b/test/test-udp-try-send.c
+@@ -59,6 +59,7 @@ static void sv_recv_cb(uv_udp_t* handle,
+                        ssize_t nread,
+                        const uv_buf_t* rcvbuf,
+                        const struct sockaddr* addr,
++                       const struct sockaddr* dst,
+                        unsigned flags) {
+   ASSERT_GT(nread, 0);
+ 
+diff --git a/test/test-watcher-cross-stop.c b/test/test-watcher-cross-stop.c
+index 8f79abb7..7c8c0749 100644
+--- a/test/test-watcher-cross-stop.c
++++ b/test/test-watcher-cross-stop.c
+@@ -49,6 +49,7 @@ static void recv_cb(uv_udp_t* handle,
+                     ssize_t nread,
+                     const uv_buf_t* buf,
+                     const struct sockaddr* addr,
++                    const struct sockaddr* dst,
+                     unsigned flags) {
+   recv_cb_called++;
+ }
+
+From b39602f398a9487bb5e6b3e40eae6481d3849994 Mon Sep 17 00:00:00 2001
+From: Tom L <tom.li@expressvpn.com>
+Date: Fri, 29 Dec 2023 14:18:45 +0800
+Subject: [PATCH 2/6] linux: specify the source addr when sending udp packets
+
+---
+ include/uv.h                         |  1 +
+ include/uv/unix.h                    |  1 +
+ src/unix/udp.c                       | 30 +++++++++++++++++++++++++---
+ src/uv-common.c                      | 10 +++++++++-
+ src/uv-common.h                      |  2 ++
+ src/win/udp.c                        |  2 ++
+ test/benchmark-udp-pummel.c          |  2 ++
+ test/echo-server.c                   |  2 +-
+ test/test-getsockname.c              |  1 +
+ test/test-ref.c                      |  1 +
+ test/test-udp-alloc-cb-fail.c        |  3 ++-
+ test/test-udp-connect.c              |  6 ++++--
+ test/test-udp-connect6.c             |  6 ++++--
+ test/test-udp-dgram-too-big.c        |  1 +
+ test/test-udp-ipv6.c                 |  1 +
+ test/test-udp-multicast-interface.c  |  1 +
+ test/test-udp-multicast-interface6.c |  1 +
+ test/test-udp-multicast-join.c       |  1 +
+ test/test-udp-multicast-join6.c      |  1 +
+ test/test-udp-multicast-ttl.c        |  1 +
+ test/test-udp-open.c                 |  3 +++
+ test/test-udp-send-and-recv.c        |  3 ++-
+ test/test-udp-send-hang-loop.c       |  1 +
+ test/test-udp-send-immediate.c       |  2 ++
+ test/test-udp-send-unreachable.c     |  4 ++++
+ test/test-udp-sendmmsg-error.c       |  2 +-
+ test/test-watcher-cross-stop.c       |  1 +
+ 27 files changed, 78 insertions(+), 12 deletions(-)
+
+diff --git a/include/uv.h b/include/uv.h
+index c431b169..5c6e3daf 100644
+--- a/include/uv.h
++++ b/include/uv.h
+@@ -747,6 +747,7 @@ UV_EXTERN int uv_udp_send(uv_udp_send_t* req,
+                           const uv_buf_t bufs[],
+                           unsigned int nbufs,
+                           const struct sockaddr* addr,
++                          const struct sockaddr* src,
+                           uv_udp_send_cb send_cb);
+ UV_EXTERN int uv_udp_try_send(uv_udp_t* handle,
+                               const uv_buf_t bufs[],
+diff --git a/include/uv/unix.h b/include/uv/unix.h
+index 0aad3761..3e09942f 100644
+--- a/include/uv/unix.h
++++ b/include/uv/unix.h
+@@ -272,6 +272,7 @@ typedef struct {
+ #define UV_UDP_SEND_PRIVATE_FIELDS                                            \
+   struct uv__queue queue;                                                     \
+   struct sockaddr_storage addr;                                               \
++  struct sockaddr_storage src;                                                \
+   unsigned int nbufs;                                                         \
+   uv_buf_t* bufs;                                                             \
+   ssize_t status;                                                             \
+diff --git a/src/unix/udp.c b/src/unix/udp.c
+index 6df0d09b..3fc7badf 100644
+--- a/src/unix/udp.c
++++ b/src/unix/udp.c
+@@ -246,8 +246,7 @@ static void uv__udp_recvmsg(uv_udp_t* handle) {
+   int count;
+ 
+   /* Buffer for pktinfo control messages */
+-  char cmbuf[1024] = {0};
+-  struct cmsghdr* cmsg = NULL;
++  char cmbuf[CMBUF_SIZE] = {0};
+ 
+   assert(handle->recv_cb != NULL);
+   assert(handle->alloc_cb != NULL);
+@@ -302,7 +301,7 @@ static void uv__udp_recvmsg(uv_udp_t* handle) {
+         flags |= UV_UDP_PARTIAL;
+ 
+       if (handle->udp_flags & UV_UDP_PKTINFO) {
+-        cmsg = CMSG_FIRSTHDR(&h);
++        struct cmsghdr* cmsg = CMSG_FIRSTHDR(&h);
+         for (; cmsg != NULL; cmsg = CMSG_NXTHDR(&h, cmsg)) {
+           /* Ignore all non-pktinfo messages */
+           if(cmsg->cmsg_level != IPPROTO_IP || cmsg->cmsg_type != IP_PKTINFO) {
+@@ -327,6 +326,8 @@ static void uv__udp_recvmsg(uv_udp_t* handle) {
+       && handle->recv_cb != NULL);
+ }
+ 
++#define CMBUF_SIZE 0x100
++
+ static void uv__udp_sendmsg(uv_udp_t* handle) {
+ #if defined(__linux__) || defined(__FreeBSD__)
+   uv_udp_send_t* req;
+@@ -336,6 +337,7 @@ static void uv__udp_sendmsg(uv_udp_t* handle) {
+   ssize_t npkts;
+   size_t pkts;
+   size_t i;
++  char cbufs[ARRAY_SIZE(h) * CMBUF_SIZE] = {0};
+ 
+   if (uv__queue_empty(&handle->write_queue))
+     return;
+@@ -366,6 +368,22 @@ static void uv__udp_sendmsg(uv_udp_t* handle) {
+         abort();
+       }
+     }
++
++#if defined(__linux__)
++    if (req->src.ss_family == AF_INET) {
++      struct in_pktinfo pi = {0};
++      struct sockaddr_in *src = (struct sockaddr_in *)&req->src;
++      pi.ipi_spec_dst.s_addr = src->sin_addr.s_addr;
++      struct cmsghdr *cmsg = (struct cmsghdr *)&cbufs[pkts * CMBUF_SIZE];
++      cmsg->cmsg_len = sizeof(struct cmsghdr) + sizeof(struct in_pktinfo);
++      cmsg->cmsg_level = IPPROTO_IP;
++      cmsg->cmsg_type = IP_PKTINFO;
++      memcpy(CMSG_DATA(cmsg), &pi, sizeof(struct in_pktinfo));
++      p->msg_hdr.msg_control = (void *)cmsg;
++      p->msg_hdr.msg_controllen = cmsg->cmsg_len;
++    }
++#endif
++
+     h[pkts].msg_hdr.msg_iov = (struct iovec*) req->bufs;
+     h[pkts].msg_hdr.msg_iovlen = req->nbufs;
+   }
+@@ -752,6 +770,8 @@ int uv__udp_send(uv_udp_send_t* req,
+                  unsigned int nbufs,
+                  const struct sockaddr* addr,
+                  unsigned int addrlen,
++                 const struct sockaddr* src,
++                 unsigned int srclen,
+                  uv_udp_send_cb send_cb) {
+   int err;
+   int empty_queue;
+@@ -776,6 +796,10 @@ int uv__udp_send(uv_udp_send_t* req,
+     req->addr.ss_family = AF_UNSPEC;
+   else
+     memcpy(&req->addr, addr, addrlen);
++  if (src == NULL || srclen == 0)
++    req->src.ss_family = AF_UNSPEC;
++  else
++    memcpy(&req->src, src, srclen);
+   req->send_cb = send_cb;
+   req->handle = handle;
+   req->nbufs = nbufs;
+diff --git a/src/uv-common.c b/src/uv-common.c
+index 2200fe3f..9d89735b 100644
+--- a/src/uv-common.c
++++ b/src/uv-common.c
+@@ -489,6 +489,7 @@ int uv_udp_send(uv_udp_send_t* req,
+                 const uv_buf_t bufs[],
+                 unsigned int nbufs,
+                 const struct sockaddr* addr,
++                const struct sockaddr* src,
+                 uv_udp_send_cb send_cb) {
+   int addrlen;
+ 
+@@ -496,7 +497,14 @@ int uv_udp_send(uv_udp_send_t* req,
+   if (addrlen < 0)
+     return addrlen;
+ 
+-  return uv__udp_send(req, handle, bufs, nbufs, addr, addrlen, send_cb);
++  int srclen = 0;
++  if (src != NULL) {
++    if (src->sa_family == AF_INET)
++      srclen = sizeof(struct sockaddr_in);
++    else
++      srclen = 0;
++  }
++  return uv__udp_send(req, handle, bufs, nbufs, addr, addrlen, src, srclen, send_cb);
+ }
+ 
+ 
+diff --git a/src/uv-common.h b/src/uv-common.h
+index cd57e5a3..d150955d 100644
+--- a/src/uv-common.h
++++ b/src/uv-common.h
+@@ -183,6 +183,8 @@ int uv__udp_send(uv_udp_send_t* req,
+                  unsigned int nbufs,
+                  const struct sockaddr* addr,
+                  unsigned int addrlen,
++                 const struct sockaddr* src,
++                 unsigned int srclen,
+                  uv_udp_send_cb send_cb);
+ 
+ int uv__udp_try_send(uv_udp_t* handle,
+diff --git a/src/win/udp.c b/src/win/udp.c
+index eab53842..68599b43 100644
+--- a/src/win/udp.c
++++ b/src/win/udp.c
+@@ -1060,6 +1060,8 @@ int uv__udp_send(uv_udp_send_t* req,
+                  unsigned int nbufs,
+                  const struct sockaddr* addr,
+                  unsigned int addrlen,
++                 const struct sockaddr* src,
++                 unsigned int srclen,
+                  uv_udp_send_cb send_cb) {
+   const struct sockaddr* bind_addr;
+   int err;
+diff --git a/test/benchmark-udp-pummel.c b/test/benchmark-udp-pummel.c
+index d59e5978..6195eee6 100644
+--- a/test/benchmark-udp-pummel.c
++++ b/test/benchmark-udp-pummel.c
+@@ -101,6 +101,7 @@ static void send_cb(uv_udp_send_t* req, int status) {
+                         bufs,
+                         ARRAY_SIZE(bufs),
+                         (const struct sockaddr*) &s->addr,
++                        NULL,
+                         send_cb));
+   send_cb_called++;
+ }
+@@ -197,6 +198,7 @@ static int pummel(unsigned int n_senders,
+                           bufs,
+                           ARRAY_SIZE(bufs),
+                           (const struct sockaddr*) &s->addr,
++                          NULL,
+                           send_cb));
+   }
+ 
+diff --git a/test/echo-server.c b/test/echo-server.c
+index ef18550d..91ca5d1c 100644
+--- a/test/echo-server.c
++++ b/test/echo-server.c
+@@ -246,7 +246,7 @@ static void on_recv(uv_udp_t* handle,
+   req = send_alloc();
+   ASSERT_NOT_NULL(req);
+   sndbuf = uv_buf_init(rcvbuf->base, nread);
+-  ASSERT_LE(0, uv_udp_send(req, handle, &sndbuf, 1, addr, on_send));
++  ASSERT_LE(0, uv_udp_send(req, handle, &sndbuf, 1, addr, NULL, on_send));
+ }
+ 
+ static int tcp4_echo_start(int port) {
+diff --git a/test/test-getsockname.c b/test/test-getsockname.c
+index 104ed3bb..c741c7f2 100644
+--- a/test/test-getsockname.c
++++ b/test/test-getsockname.c
+@@ -320,6 +320,7 @@ static void udp_sender(void) {
+                   &buf,
+                   1,
+                   (const struct sockaddr*) &server_addr,
++                  NULL,
+                   udp_send);
+   ASSERT(!r);
+ }
+diff --git a/test/test-ref.c b/test/test-ref.c
+index dbe94f71..e3c57b67 100644
+--- a/test/test-ref.c
++++ b/test/test-ref.c
+@@ -334,6 +334,7 @@ TEST_IMPL(udp_ref3) {
+               &buf,
+               1,
+               (const struct sockaddr*) &addr,
++              NULL,
+               (uv_udp_send_cb) req_cb);
+   uv_unref((uv_handle_t*)&h);
+   uv_run(uv_default_loop(), UV_RUN_DEFAULT);
+diff --git a/test/test-udp-alloc-cb-fail.c b/test/test-udp-alloc-cb-fail.c
+index 7cbd565f..0bd3bb63 100644
+--- a/test/test-udp-alloc-cb-fail.c
++++ b/test/test-udp-alloc-cb-fail.c
+@@ -141,7 +141,7 @@ static void sv_recv_cb(uv_udp_t* handle,
+   ASSERT_NOT_NULL(req);
+ 
+   sndbuf = uv_buf_init("PONG", 4);
+-  r = uv_udp_send(req, handle, &sndbuf, 1, addr, sv_send_cb);
++  r = uv_udp_send(req, handle, &sndbuf, 1, addr, NULL, sv_send_cb);
+   ASSERT_OK(r);
+ 
+   sv_recv_cb_called++;
+@@ -176,6 +176,7 @@ TEST_IMPL(udp_alloc_cb_fail) {
+                   &buf,
+                   1,
+                   (const struct sockaddr*) &addr,
++                  NULL,
+                   cl_send_cb);
+   ASSERT_OK(r);
+ 
+diff --git a/test/test-udp-connect.c b/test/test-udp-connect.c
+index 388dd3ff..2a6dda56 100644
+--- a/test/test-udp-connect.c
++++ b/test/test-udp-connect.c
+@@ -66,13 +66,14 @@ static void cl_send_cb(uv_udp_send_t* req, int status) {
+   CHECK_HANDLE(req->handle);
+   if (++cl_send_cb_called == 1) {
+     uv_udp_connect(&client, NULL);
+-    r = uv_udp_send(req, &client, &buf, 1, NULL, cl_send_cb);
++    r = uv_udp_send(req, &client, &buf, 1, NULL, NULL, cl_send_cb);
+     ASSERT_EQ(r, UV_EDESTADDRREQ);
+     r = uv_udp_send(req,
+                     &client,
+                     &buf,
+                     1,
+                     (const struct sockaddr*) &lo_addr,
++                    NULL,
+                     cl_send_cb);
+     ASSERT_OK(r);
+   }
+@@ -178,9 +179,10 @@ TEST_IMPL(udp_connect) {
+                   &buf,
+                   1,
+                   (const struct sockaddr*) &lo_addr,
++                  NULL,
+                   cl_send_cb);
+   ASSERT_EQ(r, UV_EISCONN);
+-  r = uv_udp_send(&req, &client, &buf, 1, NULL, cl_send_cb);
++  r = uv_udp_send(&req, &client, &buf, 1, NULL, NULL, cl_send_cb);
+   ASSERT_OK(r);
+ 
+   uv_run(uv_default_loop(), UV_RUN_DEFAULT);
+diff --git a/test/test-udp-connect6.c b/test/test-udp-connect6.c
+index df718a22..acec1016 100644
+--- a/test/test-udp-connect6.c
++++ b/test/test-udp-connect6.c
+@@ -66,13 +66,14 @@ static void cl_send_cb(uv_udp_send_t* req, int status) {
+   CHECK_HANDLE(req->handle);
+   if (++cl_send_cb_called == 1) {
+     uv_udp_connect(&client, NULL);
+-    r = uv_udp_send(req, &client, &buf, 1, NULL, cl_send_cb);
++    r = uv_udp_send(req, &client, &buf, 1, NULL, NULL, cl_send_cb);
+     ASSERT_EQ(r, UV_EDESTADDRREQ);
+     r = uv_udp_send(req,
+                     &client,
+                     &buf,
+                     1,
+                     (const struct sockaddr*) &lo_addr,
++                    NULL,
+                     cl_send_cb);
+     ASSERT_OK(r);
+   }
+@@ -181,9 +182,10 @@ TEST_IMPL(udp_connect6) {
+                   &buf,
+                   1,
+                   (const struct sockaddr*) &lo_addr,
++                  NULL,
+                   cl_send_cb);
+   ASSERT_EQ(r, UV_EISCONN);
+-  r = uv_udp_send(&req, &client, &buf, 1, NULL, cl_send_cb);
++  r = uv_udp_send(&req, &client, &buf, 1, NULL, NULL, cl_send_cb);
+   ASSERT_OK(r);
+ 
+   uv_run(uv_default_loop(), UV_RUN_DEFAULT);
+diff --git a/test/test-udp-dgram-too-big.c b/test/test-udp-dgram-too-big.c
+index 8fae756e..c879b283 100644
+--- a/test/test-udp-dgram-too-big.c
++++ b/test/test-udp-dgram-too-big.c
+@@ -75,6 +75,7 @@ TEST_IMPL(udp_dgram_too_big) {
+                   &buf,
+                   1,
+                   (const struct sockaddr*) &addr,
++                  NULL,
+                   send_cb);
+   ASSERT_OK(r);
+ 
+diff --git a/test/test-udp-ipv6.c b/test/test-udp-ipv6.c
+index 50a9c7f7..4f323508 100644
+--- a/test/test-udp-ipv6.c
++++ b/test/test-udp-ipv6.c
+@@ -194,6 +194,7 @@ static void do_test(uv_udp_recv_cb recv_cb, int bind_flags) {
+                   &buf,
+                   1,
+                   (const struct sockaddr*) &addr,
++                  NULL,
+                   send_cb);
+   ASSERT_OK(r);
+ 
+diff --git a/test/test-udp-multicast-interface.c b/test/test-udp-multicast-interface.c
+index 2c558c8b..beddcccc 100644
+--- a/test/test-udp-multicast-interface.c
++++ b/test/test-udp-multicast-interface.c
+@@ -84,6 +84,7 @@ TEST_IMPL(udp_multicast_interface) {
+                   &buf,
+                   1,
+                   (const struct sockaddr*)&addr,
++                  NULL,
+                   sv_send_cb);
+   ASSERT_OK(r);
+ 
+diff --git a/test/test-udp-multicast-interface6.c b/test/test-udp-multicast-interface6.c
+index 54fc87ed..9a7e3146 100644
+--- a/test/test-udp-multicast-interface6.c
++++ b/test/test-udp-multicast-interface6.c
+@@ -91,6 +91,7 @@ TEST_IMPL(udp_multicast_interface6) {
+                   &buf,
+                   1,
+                   (const struct sockaddr*)&addr,
++                  NULL,
+                   sv_send_cb);
+   ASSERT_OK(r);
+ 
+diff --git a/test/test-udp-multicast-join.c b/test/test-udp-multicast-join.c
+index ed399ac0..2bdffd38 100644
+--- a/test/test-udp-multicast-join.c
++++ b/test/test-udp-multicast-join.c
+@@ -85,6 +85,7 @@ static int do_send(uv_udp_send_t* send_req) {
+                      &buf,
+                      1,
+                      (const struct sockaddr*) &addr,
++                     NULL,
+                      sv_send_cb);
+ }
+ 
+diff --git a/test/test-udp-multicast-join6.c b/test/test-udp-multicast-join6.c
+index 23e028f3..aea3b3d3 100644
+--- a/test/test-udp-multicast-join6.c
++++ b/test/test-udp-multicast-join6.c
+@@ -96,6 +96,7 @@ static int do_send(uv_udp_send_t* send_req) {
+                      &buf,
+                      1,
+                      (const struct sockaddr*) &addr,
++                     NULL,
+                      sv_send_cb);
+ }
+ 
+diff --git a/test/test-udp-multicast-ttl.c b/test/test-udp-multicast-ttl.c
+index 50bc54a0..7e686441 100644
+--- a/test/test-udp-multicast-ttl.c
++++ b/test/test-udp-multicast-ttl.c
+@@ -77,6 +77,7 @@ TEST_IMPL(udp_multicast_ttl) {
+                   &buf,
+                   1,
+                   (const struct sockaddr*) &addr,
++                  NULL,
+                   sv_send_cb);
+   ASSERT_OK(r);
+ 
+diff --git a/test/test-udp-open.c b/test/test-udp-open.c
+index 316eb8fd..a9cdf96c 100644
+--- a/test/test-udp-open.c
++++ b/test/test-udp-open.c
+@@ -165,6 +165,7 @@ TEST_IMPL(udp_open) {
+                   &buf,
+                   1,
+                   (const struct sockaddr*) &addr,
++                  NULL,
+                   send_cb);
+   ASSERT_OK(r);
+ 
+@@ -286,6 +287,7 @@ TEST_IMPL(udp_open_connect) {
+                   &buf,
+                   1,
+                   NULL,
++                  NULL,
+                   send_cb);
+   ASSERT_OK(r);
+ 
+@@ -337,6 +339,7 @@ TEST_IMPL(udp_send_unix) {
+                   &buf,
+                   1,
+                   (const struct sockaddr*) &addr,
++                  NULL,
+                   NULL);
+   ASSERT_OK(r);
+ 
+diff --git a/test/test-udp-send-and-recv.c b/test/test-udp-send-and-recv.c
+index 652dcd4a..da5e5c8a 100644
+--- a/test/test-udp-send-and-recv.c
++++ b/test/test-udp-send-and-recv.c
+@@ -152,7 +152,7 @@ static void sv_recv_cb(uv_udp_t* handle,
+   ASSERT_NOT_NULL(req);
+ 
+   sndbuf = uv_buf_init("PONG", 4);
+-  r = uv_udp_send(req, handle, &sndbuf, 1, addr, sv_send_cb);
++  r = uv_udp_send(req, handle, &sndbuf, 1, addr, NULL, sv_send_cb);
+   ASSERT_OK(r);
+ 
+   sv_recv_cb_called++;
+@@ -189,6 +189,7 @@ TEST_IMPL(udp_send_and_recv) {
+                   &buf,
+                   1,
+                   (const struct sockaddr*) &addr,
++                  NULL,
+                   cl_send_cb);
+   ASSERT_OK(r);
+ 
+diff --git a/test/test-udp-send-hang-loop.c b/test/test-udp-send-hang-loop.c
+index 763bb28b..92f2a2b6 100644
+--- a/test/test-udp-send-hang-loop.c
++++ b/test/test-udp-send-hang-loop.c
+@@ -60,6 +60,7 @@ static void idle_cb(uv_idle_t* handle) {
+                   &buf,
+                   1,
+                   (const struct sockaddr*) &addr,
++                  NULL,
+                   send_cb);
+   ASSERT_OK(r);
+ }
+diff --git a/test/test-udp-send-immediate.c b/test/test-udp-send-immediate.c
+index 7ce159a3..7f4c9376 100644
+--- a/test/test-udp-send-immediate.c
++++ b/test/test-udp-send-immediate.c
+@@ -125,6 +125,7 @@ TEST_IMPL(udp_send_immediate) {
+                   &buf,
+                   1,
+                   (const struct sockaddr*) &addr,
++                  NULL,
+                   cl_send_cb);
+   ASSERT_OK(r);
+ 
+@@ -135,6 +136,7 @@ TEST_IMPL(udp_send_immediate) {
+                   &buf,
+                   1,
+                   (const struct sockaddr*) &addr,
++                  NULL,
+                   cl_send_cb);
+   ASSERT_OK(r);
+ 
+diff --git a/test/test-udp-send-unreachable.c b/test/test-udp-send-unreachable.c
+index 8dfb1d31..a1a16c24 100644
+--- a/test/test-udp-send-unreachable.c
++++ b/test/test-udp-send-unreachable.c
+@@ -143,6 +143,7 @@ TEST_IMPL(udp_send_unreachable) {
+                   &buf,
+                   1,
+                   (const struct sockaddr*) &addr,
++                  NULL,
+                   send_cb);
+   ASSERT_OK(r);
+ 
+@@ -153,6 +154,7 @@ TEST_IMPL(udp_send_unreachable) {
+                   &buf,
+                   1,
+                   (const struct sockaddr*) &addr,
++                  NULL,
+                   send_cb);
+   ASSERT_OK(r);
+ 
+@@ -176,6 +178,7 @@ TEST_IMPL(udp_send_unreachable) {
+                     &buf,
+                     1,
+                     (const struct sockaddr*) &addr,
++                    NULL,
+                     send_cb_recverr);
+     ASSERT_OK(r);
+ 
+@@ -186,6 +189,7 @@ TEST_IMPL(udp_send_unreachable) {
+                     &buf,
+                     1,
+                     (const struct sockaddr*) &addr,
++                    NULL,
+                     send_cb_recverr);
+     ASSERT_OK(r);
+   }
+diff --git a/test/test-udp-sendmmsg-error.c b/test/test-udp-sendmmsg-error.c
+index 0b647585..8ac9a0e5 100644
+--- a/test/test-udp-sendmmsg-error.c
++++ b/test/test-udp-sendmmsg-error.c
+@@ -61,7 +61,7 @@ TEST_IMPL(udp_sendmmsg_error) {
+ 
+   buf = uv_buf_init("TEST", 4);
+   for (i = 0; i < DATAGRAMS; ++i)
+-    ASSERT_OK(uv_udp_send(&req[i], &client, &buf, 1, NULL, send_cb));
++    ASSERT_OK(uv_udp_send(&req[i], &client, &buf, 1, NULL, NULL, send_cb));
+ 
+   uv_run(uv_default_loop(), UV_RUN_DEFAULT);
+ 
+diff --git a/test/test-watcher-cross-stop.c b/test/test-watcher-cross-stop.c
+index 7c8c0749..1a1f1af1 100644
+--- a/test/test-watcher-cross-stop.c
++++ b/test/test-watcher-cross-stop.c
+@@ -92,6 +92,7 @@ TEST_IMPL(watcher_cross_stop) {
+                           &buf,
+                           1,
+                           (const struct sockaddr*) &addr,
++                          NULL,
+                           send_cb));
+   }
+ 
+
+From 46fb51a863b476ed24d5fb662d1dae3ba8ef2b57 Mon Sep 17 00:00:00 2001
+From: Tom L <tom.li@expressvpn.com>
+Date: Wed, 3 Jan 2024 10:03:38 +0800
+Subject: [PATCH 3/6] misc: fixing windows and sample code
+
+---
+ docs/code/udp-dhcp/main.c |  4 ++--
+ src/win/udp.c             | 14 ++++++++------
+ 2 files changed, 10 insertions(+), 8 deletions(-)
+
+diff --git a/docs/code/udp-dhcp/main.c b/docs/code/udp-dhcp/main.c
+index 4dc28390..3a77c0bd 100644
+--- a/docs/code/udp-dhcp/main.c
++++ b/docs/code/udp-dhcp/main.c
+@@ -14,7 +14,7 @@ void alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
+   buf->len = suggested_size;
+ }
+ 
+-void on_read(uv_udp_t *req, ssize_t nread, const uv_buf_t *buf, const struct sockaddr *addr, unsigned flags) {
++void on_read(uv_udp_t *req, ssize_t nread, const uv_buf_t *buf, const struct sockaddr *addr, const struct sockaddr *dst, unsigned flags) {
+     if (nread < 0) {
+         fprintf(stderr, "Read error %s\n", uv_err_name(nread));
+         uv_close((uv_handle_t*) req, NULL);
+@@ -122,7 +122,7 @@ int main() {
+ 
+     struct sockaddr_in send_addr;
+     uv_ip4_addr("255.255.255.255", 67, &send_addr);
+-    uv_udp_send(&send_req, &send_socket, &discover_msg, 1, (const struct sockaddr *)&send_addr, on_send);
++    uv_udp_send(&send_req, &send_socket, &discover_msg, 1, (const struct sockaddr *)&send_addr, NULL, on_send);
+ 
+     return uv_run(loop, UV_RUN_DEFAULT);
+ }
+diff --git a/src/win/udp.c b/src/win/udp.c
+index 68599b43..4f55235b 100644
+--- a/src/win/udp.c
++++ b/src/win/udp.c
+@@ -423,7 +423,7 @@ void uv__process_udp_recv_req(uv_loop_t* loop, uv_udp_t* handle,
+         uv_udp_recv_stop(handle);
+         buf = (handle->flags & UV_HANDLE_ZERO_READ) ?
+               uv_buf_init(NULL, 0) : handle->recv_buffer;
+-        handle->recv_cb(handle, uv_translate_sys_error(err), &buf, NULL, 0);
++        handle->recv_cb(handle, uv_translate_sys_error(err), &buf, NULL, NULL, 0);
+       }
+       goto done;
+     }
+@@ -436,6 +436,7 @@ void uv__process_udp_recv_req(uv_loop_t* loop, uv_udp_t* handle,
+                     req->u.io.overlapped.InternalHigh,
+                     &handle->recv_buffer,
+                     (const struct sockaddr*) &handle->recv_from,
++                    NULL,
+                     partial ? UV_UDP_PARTIAL : 0);
+   } else if (handle->flags & UV_HANDLE_READING) {
+     DWORD bytes, err, flags;
+@@ -452,7 +453,7 @@ void uv__process_udp_recv_req(uv_loop_t* loop, uv_udp_t* handle,
+       buf = uv_buf_init(NULL, 0);
+       handle->alloc_cb((uv_handle_t*) handle, UV__UDP_DGRAM_MAXSIZE, &buf);
+       if (buf.base == NULL || buf.len == 0) {
+-        handle->recv_cb(handle, UV_ENOBUFS, &buf, NULL, 0);
++        handle->recv_cb(handle, UV_ENOBUFS, &buf, NULL, NULL, 0);
+         goto done;
+       }
+ 
+@@ -473,7 +474,7 @@ void uv__process_udp_recv_req(uv_loop_t* loop, uv_udp_t* handle,
+ 
+         /* Message received */
+         err = ERROR_SUCCESS;
+-        handle->recv_cb(handle, bytes, &buf, (const struct sockaddr*) &from, 0);
++        handle->recv_cb(handle, bytes, &buf, (const struct sockaddr*) &from, NULL, 0);
+       } else {
+         err = WSAGetLastError();
+         if (err == WSAEMSGSIZE) {
+@@ -482,19 +483,20 @@ void uv__process_udp_recv_req(uv_loop_t* loop, uv_udp_t* handle,
+                           bytes,
+                           &buf,
+                           (const struct sockaddr*) &from,
++                          NULL,
+                           UV_UDP_PARTIAL);
+         } else if (err == WSAEWOULDBLOCK) {
+           /* Kernel buffer empty */
+-          handle->recv_cb(handle, 0, &buf, NULL, 0);
++          handle->recv_cb(handle, 0, &buf, NULL, NULL, 0);
+         } else if (err == WSAECONNRESET || err == WSAENETRESET) {
+           /* WSAECONNRESET/WSANETRESET is ignored because this just indicates
+            * that a previous sendto operation failed.
+            */
+-          handle->recv_cb(handle, 0, &buf, NULL, 0);
++          handle->recv_cb(handle, 0, &buf, NULL, NULL, 0);
+         } else {
+           /* Any other error that we want to report back to the user. */
+           uv_udp_recv_stop(handle);
+-          handle->recv_cb(handle, uv_translate_sys_error(err), &buf, NULL, 0);
++          handle->recv_cb(handle, uv_translate_sys_error(err), &buf, NULL, NULL, 0);
+         }
+       }
+     }
+
+From c9cdca5448350cb0812c572b225d37844c28bb6d Mon Sep 17 00:00:00 2001
+From: Tom L <tom.li@expressvpn.com>
+Date: Fri, 5 Jan 2024 09:57:43 +0800
+Subject: [PATCH 4/6] udp: set UV_UDP_PKTINFO to recv_cb flags if the dst addr
+ is available
+
+---
+ docs/src/udp.rst | 12 ++++++++++--
+ include/uv.h     |  4 +++-
+ src/unix/udp.c   |  2 ++
+ 3 files changed, 15 insertions(+), 3 deletions(-)
+
+diff --git a/docs/src/udp.rst b/docs/src/udp.rst
+index d7da95ed..c1cb1422 100644
+--- a/docs/src/udp.rst
++++ b/docs/src/udp.rst
+@@ -62,8 +62,14 @@ Data types
+              */
+             UV_UDP_LINUX_RECVERR = 32,
+             /*
+-            * Indicates that recvmmsg should be used, if available.
+-            */
++             * Indicates that packet info (PKTINFO) should be enabled when receiving messages. 
++             * When this flag is set in uv_udp_recv_cb, dst will always be set to a non-NULL
++             * destination address.
++             */
++            UV_UDP_PKTINFO = 128,
++            /*
++             * Indicates that recvmmsg should be used, if available.
++             */
+             UV_UDP_RECVMMSG = 256
+         };
+ 
+@@ -86,6 +92,8 @@ Data types
+     * `buf`: :c:type:`uv_buf_t` with the received data.
+     * `addr`: ``struct sockaddr*`` containing the address of the sender.
+       Can be NULL. Valid for the duration of the callback only.
++    * `dst`: ``struct sockaddr*`` containing the destination address of the packet.
++      Can be NULL. Valid for the duration of the callback only.
+     * `flags`: One or more or'ed UV_UDP_* constants.
+ 
+     The callee is responsible for freeing the buffer, libuv does not reuse it.
+diff --git a/include/uv.h b/include/uv.h
+index 5c6e3daf..0adcd4bc 100644
+--- a/include/uv.h
++++ b/include/uv.h
+@@ -672,7 +672,9 @@ enum uv_udp_flags {
+    */
+   UV_UDP_LINUX_RECVERR = 32,
+   /*
+-   * Indicates that packet info (PKTINFO) should be enabled when receiving messages.
++   * Indicates that packet info (PKTINFO) should be enabled when receiving messages. 
++   * When this flag is set in uv_udp_recv_cb, dst will always be set to a non-NULL
++   * destination address.
+    */
+   UV_UDP_PKTINFO = 128,
+   /*
+diff --git a/src/unix/udp.c b/src/unix/udp.c
+index 3fc7badf..ce419670 100644
+--- a/src/unix/udp.c
++++ b/src/unix/udp.c
+@@ -213,6 +213,7 @@ static int uv__udp_recvmmsg(uv_udp_t* handle, uv_buf_t* buf) {
+           struct in_pktinfo *pi = (struct in_pktinfo *)CMSG_DATA(cmsg);
+           dst_peer.sin_family = AF_INET;
+           dst_peer.sin_addr.s_addr = pi->ipi_spec_dst.s_addr;
++          flags |= UV_UDP_PKTINFO;
+           break;
+         }
+       }
+@@ -312,6 +313,7 @@ static void uv__udp_recvmsg(uv_udp_t* handle) {
+           dst.sin_family = AF_INET;
+           dst.sin_addr.s_addr = pi->ipi_spec_dst.s_addr;
+           memcpy(&dst_peer, &dst, sizeof(dst));
++          flags |= UV_UDP_PKTINFO;
+           break;
+         }
+       }
+
+From 618ca9e4ea9094aefc48689e9c4b907f7cef96a2 Mon Sep 17 00:00:00 2001
+From: Tom L <tom.li@expressvpn.com>
+Date: Fri, 5 Jan 2024 10:12:36 +0800
+Subject: [PATCH 5/6] udp: only set the src addr when handle->udp_flags
+ contains UV_UDP_PKTINFO
+
+---
+ src/unix/udp.c | 24 +++++++++++++-----------
+ 1 file changed, 13 insertions(+), 11 deletions(-)
+
+diff --git a/src/unix/udp.c b/src/unix/udp.c
+index ce419670..be3f1758 100644
+--- a/src/unix/udp.c
++++ b/src/unix/udp.c
+@@ -372,17 +372,19 @@ static void uv__udp_sendmsg(uv_udp_t* handle) {
+     }
+ 
+ #if defined(__linux__)
+-    if (req->src.ss_family == AF_INET) {
+-      struct in_pktinfo pi = {0};
+-      struct sockaddr_in *src = (struct sockaddr_in *)&req->src;
+-      pi.ipi_spec_dst.s_addr = src->sin_addr.s_addr;
+-      struct cmsghdr *cmsg = (struct cmsghdr *)&cbufs[pkts * CMBUF_SIZE];
+-      cmsg->cmsg_len = sizeof(struct cmsghdr) + sizeof(struct in_pktinfo);
+-      cmsg->cmsg_level = IPPROTO_IP;
+-      cmsg->cmsg_type = IP_PKTINFO;
+-      memcpy(CMSG_DATA(cmsg), &pi, sizeof(struct in_pktinfo));
+-      p->msg_hdr.msg_control = (void *)cmsg;
+-      p->msg_hdr.msg_controllen = cmsg->cmsg_len;
++    if(handle->udp_flags & UV_UDP_PKTINFO) {
++      if (req->src.ss_family == AF_INET) {
++        struct in_pktinfo pi = {0};
++        struct sockaddr_in *src = (struct sockaddr_in *)&req->src;
++        pi.ipi_spec_dst.s_addr = src->sin_addr.s_addr;
++        struct cmsghdr *cmsg = (struct cmsghdr *)&cbufs[pkts * CMBUF_SIZE];
++        cmsg->cmsg_len = sizeof(struct cmsghdr) + sizeof(struct in_pktinfo);
++        cmsg->cmsg_level = IPPROTO_IP;
++        cmsg->cmsg_type = IP_PKTINFO;
++        memcpy(CMSG_DATA(cmsg), &pi, sizeof(struct in_pktinfo));
++        p->msg_hdr.msg_control = (void *)cmsg;
++        p->msg_hdr.msg_controllen = cmsg->cmsg_len;
++      }
+     }
+ #endif
+ 
+
+From 91a2abc5be8e889844242defb2c07069b454d39e Mon Sep 17 00:00:00 2001
+From: Tom L <tom.li@expressvpn.com>
+Date: Mon, 8 Jan 2024 14:48:57 +0800
+Subject: [PATCH 6/6] udp: rename addr to dst in uv_udp_send api
+
+---
+ include/uv.h    |  2 +-
+ src/unix/udp.c  | 14 +++++++-------
+ src/uv-common.c | 12 ++++++------
+ src/uv-common.h |  4 ++--
+ src/win/udp.c   | 12 ++++++------
+ 5 files changed, 22 insertions(+), 22 deletions(-)
+
+diff --git a/include/uv.h b/include/uv.h
+index 0adcd4bc..13864f45 100644
+--- a/include/uv.h
++++ b/include/uv.h
+@@ -748,7 +748,7 @@ UV_EXTERN int uv_udp_send(uv_udp_send_t* req,
+                           uv_udp_t* handle,
+                           const uv_buf_t bufs[],
+                           unsigned int nbufs,
+-                          const struct sockaddr* addr,
++                          const struct sockaddr* dst,
+                           const struct sockaddr* src,
+                           uv_udp_send_cb send_cb);
+ UV_EXTERN int uv_udp_try_send(uv_udp_t* handle,
+diff --git a/src/unix/udp.c b/src/unix/udp.c
+index be3f1758..e59a8195 100644
+--- a/src/unix/udp.c
++++ b/src/unix/udp.c
+@@ -772,8 +772,8 @@ int uv__udp_send(uv_udp_send_t* req,
+                  uv_udp_t* handle,
+                  const uv_buf_t bufs[],
+                  unsigned int nbufs,
+-                 const struct sockaddr* addr,
+-                 unsigned int addrlen,
++                 const struct sockaddr* dst,
++                 unsigned int dstlen,
+                  const struct sockaddr* src,
+                  unsigned int srclen,
+                  uv_udp_send_cb send_cb) {
+@@ -782,8 +782,8 @@ int uv__udp_send(uv_udp_send_t* req,
+ 
+   assert(nbufs > 0);
+ 
+-  if (addr) {
+-    err = uv__udp_maybe_deferred_bind(handle, addr->sa_family, 0);
++  if (dst) {
++    err = uv__udp_maybe_deferred_bind(handle, dst->sa_family, 0);
+     if (err)
+       return err;
+   }
+@@ -795,11 +795,11 @@ int uv__udp_send(uv_udp_send_t* req,
+   empty_queue = (handle->send_queue_count == 0);
+ 
+   uv__req_init(handle->loop, req, UV_UDP_SEND);
+-  assert(addrlen <= sizeof(req->addr));
+-  if (addr == NULL)
++  assert(dstlen <= sizeof(req->addr));
++  if (dst == NULL)
+     req->addr.ss_family = AF_UNSPEC;
+   else
+-    memcpy(&req->addr, addr, addrlen);
++    memcpy(&req->addr, dst, dstlen);
+   if (src == NULL || srclen == 0)
+     req->src.ss_family = AF_UNSPEC;
+   else
+diff --git a/src/uv-common.c b/src/uv-common.c
+index 9d89735b..956e7d02 100644
+--- a/src/uv-common.c
++++ b/src/uv-common.c
+@@ -488,14 +488,14 @@ int uv_udp_send(uv_udp_send_t* req,
+                 uv_udp_t* handle,
+                 const uv_buf_t bufs[],
+                 unsigned int nbufs,
+-                const struct sockaddr* addr,
++                const struct sockaddr* dst,
+                 const struct sockaddr* src,
+                 uv_udp_send_cb send_cb) {
+-  int addrlen;
++  int dstlen;
+ 
+-  addrlen = uv__udp_check_before_send(handle, addr);
+-  if (addrlen < 0)
+-    return addrlen;
++  dstlen = uv__udp_check_before_send(handle, dst);
++  if (dstlen < 0)
++    return dstlen;
+ 
+   int srclen = 0;
+   if (src != NULL) {
+@@ -504,7 +504,7 @@ int uv_udp_send(uv_udp_send_t* req,
+     else
+       srclen = 0;
+   }
+-  return uv__udp_send(req, handle, bufs, nbufs, addr, addrlen, src, srclen, send_cb);
++  return uv__udp_send(req, handle, bufs, nbufs, dst, dstlen, src, srclen, send_cb);
+ }
+ 
+ 
+diff --git a/src/uv-common.h b/src/uv-common.h
+index d150955d..5e40f86d 100644
+--- a/src/uv-common.h
++++ b/src/uv-common.h
+@@ -181,8 +181,8 @@ int uv__udp_send(uv_udp_send_t* req,
+                  uv_udp_t* handle,
+                  const uv_buf_t bufs[],
+                  unsigned int nbufs,
+-                 const struct sockaddr* addr,
+-                 unsigned int addrlen,
++                 const struct sockaddr* dst,
++                 unsigned int dstlen,
+                  const struct sockaddr* src,
+                  unsigned int srclen,
+                  uv_udp_send_cb send_cb);
+diff --git a/src/win/udp.c b/src/win/udp.c
+index 4f55235b..175ddd09 100644
+--- a/src/win/udp.c
++++ b/src/win/udp.c
+@@ -1060,8 +1060,8 @@ int uv__udp_send(uv_udp_send_t* req,
+                  uv_udp_t* handle,
+                  const uv_buf_t bufs[],
+                  unsigned int nbufs,
+-                 const struct sockaddr* addr,
+-                 unsigned int addrlen,
++                 const struct sockaddr* dst,
++                 unsigned int dstlen,
+                  const struct sockaddr* src,
+                  unsigned int srclen,
+                  uv_udp_send_cb send_cb) {
+@@ -1069,19 +1069,19 @@ int uv__udp_send(uv_udp_send_t* req,
+   int err;
+ 
+   if (!(handle->flags & UV_HANDLE_BOUND)) {
+-    if (addrlen == sizeof(uv_addr_ip4_any_))
++    if (dstlen == sizeof(uv_addr_ip4_any_))
+       bind_addr = (const struct sockaddr*) &uv_addr_ip4_any_;
+-    else if (addrlen == sizeof(uv_addr_ip6_any_))
++    else if (dstlen == sizeof(uv_addr_ip6_any_))
+       bind_addr = (const struct sockaddr*) &uv_addr_ip6_any_;
+     else
+       return UV_EINVAL;
+ 
+-    err = uv__udp_maybe_bind(handle, bind_addr, addrlen, 0);
++    err = uv__udp_maybe_bind(handle, bind_addr, dstlen, 0);
+     if (err)
+       return uv_translate_sys_error(err);
+   }
+ 
+-  err = uv__send(req, handle, bufs, nbufs, addr, addrlen, send_cb);
++  err = uv__send(req, handle, bufs, nbufs, dst, dstlen, send_cb);
+   if (err)
+     return uv_translate_sys_error(err);
+ 

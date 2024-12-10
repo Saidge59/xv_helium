@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+
+set -e
+
+CEEDLING_PATH=$(gem which ceedling)
+CEEDLING_HOME=$(dirname $(dirname "${CEEDLING_PATH}"))
+UNITY_HOME=${CEEDLING_HOME}/vendor/unity
+TEST_OUTPUT=${1:-"build/test/test-results.out"}
+
+ruby "${UNITY_HOME}/auto/parse_output.rb" -xml "${TEST_OUTPUT}"

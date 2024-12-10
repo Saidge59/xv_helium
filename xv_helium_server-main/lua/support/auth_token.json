@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "audiences": ["xv.vpn"],
+  "entitlements": ["xv.vpn"],
+  "auth_token_public_keys": {
+    "xv-prod-public-key": {
+      "path": "/path/to/public_key1.pem"
+    },
+    "xv-debug-pubkey": {
+      "pub": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArqHtgUkuLFkcXJ5VSiPn\nmW4E1bUYjCNcUjnR5W/UU+aDEBI8XfcRoUlNSLMmZj7I9QXKY45HbsWnoU9pLp7D\nR2XeqoFNykTzjCbyJRnXrJFjzAFwTiSYYvCi9vdrwb4P0dp7X9w3HvMSLYC659lG\nRQRX9PckQoMnJDdQcJph0F+OQ4Jp7QqkBevAw5hvRC6Jy1FbpKpug0l7dktqDivr\nDhffHYwx7+mcnnwP+5WxfYXArfWTgLIXEPcJtFxr/xzzjy19ZLdBDAThQF1cfWqq\nh2aQjdOuQp1vNKFkygnmeI7mc33IgMOHuyI9TIWZBepjzEZUCaj/drcwoHM/AeuF\n3QIDAQAB\n-----END PUBLIC KEY-----\n"
+    },
+    "xv-dip-local-testing": {
+      "pub": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArqHtgUkuLFkcXJ5VSiPn\nmW4E1bUYjCNcUjnR5W/UU+aDEBI8XfcRoUlNSLMmZj7I9QXKY45HbsWnoU9pLp7D\nR2XeqoFNykTzjCbyJRnXrJFjzAFwTiSYYvCi9vdrwb4P0dp7X9w3HvMSLYC659lG\nRQRX9PckQoMnJDdQcJph0F+OQ4Jp7QqkBevAw5hvRC6Jy1FbpKpug0l7dktqDivr\nDhffHYwx7+mcnnwP+5WxfYXArfWTgLIXEPcJtFxr/xzzjy19ZLdBDAThQF1cfWqq\nh2aQjdOuQp1vNKFkygnmeI7mc33IgMOHuyI9TIWZBepjzEZUCaj/drcwoHM/AeuF\n3QIDAQAB\n-----END PUBLIC KEY-----\n"
+    }
+  }
+}

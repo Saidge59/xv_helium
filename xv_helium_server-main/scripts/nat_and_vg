@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -e
+./setup_nat
+valgrind --tool=callgrind --callgrind-out-file=/host/vg.out ./build/release/helium-server.out -c /config/test_server.conf 

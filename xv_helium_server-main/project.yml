@@ -1,0 +1,260 @@
+---
+:project:
+  :use_exceptions: FALSE
+  :use_test_preprocessor: TRUE
+  :use_auxiliary_dependencies: TRUE
+  :build_root: build
+  :release_build: TRUE
+  :test_file_prefix: test_
+  :which_ceedling: gem
+  :output: helium
+  :default_tasks:
+    - test:all
+
+:environment:
+  - CC: clang
+  - LUA_PATH: "lua/?.lua;;"
+
+:release_build:
+  :output: helium-server.out
+
+:extension:
+  :executable: .out
+
+:paths:
+  :test:
+    - +:test/**
+    - -:test/support
+  :include:
+    - include/**
+  :source:
+    - src/**
+  :support:
+    - test/support
+    - /usr/include/hpt
+    - /usr/include/xenon
+
+:defines:
+  :release:
+    - _FORTIFY_SOURCE=2
+  :test:
+    - TEST
+  :test_preprocess:
+    - TEST
+
+:cmock:
+  :mock_prefix: mock_
+  :when_no_prototypes: :warn
+  :enforce_strict_ordering: TRUE
+  :includes:
+    - libhe_testable_types.h
+  :plugins:
+    - :ignore
+    - :callback
+    - :expect_any_args
+    - :ignore_arg
+  :treat_as:
+    uint8: HEX8
+    uint16: HEX16
+    uint32: UINT32
+    int8: INT8
+    bool: UINT8
+
+# Add -gcov to the plugins list to make sure of the gcov plugin
+# You will need to have gcov and gcovr both installed to make it work.
+# For more information on these options, see docs in plugins/gcov
+:gcov:
+  :html_report: TRUE
+  :html_report_type: detailed
+  :html_medium_threshold: 75
+  :html_high_threshold: 90
+  :xml_report: TRUE
+
+# LIBRARIES
+:libraries:
+  :system:
+    - dl
+    - ":libhpt.a"
+    - lua5.3
+    - xenon
+
+:plugins:
+  :enabled:
+    - stdout_pretty_tests_report
+    - module_generator
+    - raw_output_report
+    - xml_tests_report
+    - junit_tests_report
+    - gcov
+    - dependencies
+    - compile_commands_json
+    - command_hooks
+
+:dependencies:
+  :libraries:
+    - :name: jemalloc
+      :source_path: third_party/jemalloc
+      :artifact_path: third_party/builds/jemalloc
+      :fetch:
+        :method: :git
+        :source: https://github.com/jemalloc/jemalloc.git
+        :tag: 5.3.0
+      :environment:
+        - CFLAGS= -fPIC -D_FORTIFY_SOURCE=2
+      :build:
+        - "autoconf"
+        - "./configure --prefix=$(pwd)/../builds/jemalloc/ --with-jemalloc-prefix=je --disable-cxx --enable-static --disable-shared"
+        - "make"
+        - "make install"
+      :artifacts:
+        :includes:
+          - include/jemalloc/**
+        :static_libraries:
+          - lib/libjemalloc.a
+    - :name: lightway_core
+      :source_path: third_party/lightway_core
+      :fetch:
+        :method: :git
+        :source: https://github.com/expressvpn/lightway-core.git
+        :tag: v1.17.3
+      :environment:
+        - CFLAGS= -DLARGE_STATIC_BUFFERS -DWOLFSSL_DTLS_ALLOW_FUTURE -DWOLFSSL_MIN_RSA_BITS=2048 -DWOLFSSL_MIN_ECC_BITS=256 -fPIC -DWOLFSSL_NO_SPHINCS
+      :build:
+        # Select the correct arch for the lightway-core project
+        - if uname -m | grep -q aarch64; then /usr/local/bin/ceedling verbosity[4] release project:linux_arm64; else /usr/local/bin/ceedling verbosity[4] release project:linux; fi
+      :artifacts:
+        :includes:
+          - public/**
+        :static_libraries:
+          - build/artifacts/release/libhelium.a
+          - third_party/builds/wolfssl_build/lib/libwolfssl.a
+    - :name: libuv
+      :source_path: third_party/libuv
+      :artifact_path: third_party/builds/libuv
+      :fetch:
+        :method: :git
+        :source: https://github.com/libuv/libuv.git
+        :tag: v1.47.0
+      :environment:
+        - CFLAGS= -fPIC -D_FORTIFY_SOURCE=2
+      :build:
+        - "git apply ../../patches/libuv/*.patch"
+        - "sh autogen.sh"
+        - "./configure --prefix=$(pwd)/../builds/libuv/ --enable-static --disable-shared"
+        - "make"
+        - "make install"
+      :artifacts:
+        :includes:
+          - include/*
+        :static_libraries:
+          - lib/libuv.a
+    - :name: statsd
+      :source_path: third_party/statsd
+      :artifact_path: third_party/statsd/tidy
+      :fetch:
+        :method: :git
+        :source: https://github.com/romanbsd/statsd-c-client
+        :commit: ef6f82f
+      :environment:
+        - CFLAGS= -fPIC -D_FORTIFY_SOURCE=2
+      :build:
+        - mkdir -p tidy
+        - cp statsd-client.c tidy/
+        - cp statsd-client.h tidy/
+      :artifacts:
+        :source:
+          - /statsd-client.c
+        :includes:
+          - /*
+    - :name: zlog
+      :source_path: third_party/zlog
+      :artifact_path: third_party/zlog/tidy
+      :fetch:
+        :method: :git
+        :source: https://github.com/zma/zlog.git
+        :commit: 16f266e
+      :environment:
+        - CFLAGS= -fPIC -D_FORTIFY_SOURCE=2
+      :build:
+        - mkdir -p tidy
+        - cp zlog.c tidy/
+        - cp zlog.h tidy/
+        - cp zlog-config.h tidy/
+        - sed -i "s/1 << 22/1 << 10/" tidy/zlog-config.h
+        - sed -i "s/15/2/" zlog-config.h
+      :artifacts:
+        :includes:
+          - /*
+        :source:
+          - /zlog.c
+    - :name: argparse
+      :source_path: third_party/argparse
+      :artifact_path: third_party/argparse/tidy
+      :fetch:
+        :method: :git
+        :source: https://github.com/cofyc/argparse.git
+        :tag: v1.1.0
+      :environment:
+        - CFLAGS= -fPIC -D_FORTIFY_SOURCE=2
+      :build:
+        - mkdir -p tidy
+        - cp argparse.c tidy/
+        - cp argparse.h tidy/
+      :artifacts:
+        :includes:
+          - /*
+        :source:
+          - /argparse.c
+    - :name: msgpack
+      :source_path: third_party/msgpack
+      :artifact_path: third_party/builds/msgpack
+      :fetch:
+        :method: :git
+        :source: https://github.com/msgpack/msgpack-c.git
+        :tag: c-6.0.0
+      :environment:
+        - CFLAGS= -fPIC -D_FORTIFY_SOURCE=2
+      :build:
+        - cmake -DBUILD_SHARED_LIBS=OFF -DMSGPACK_BUILD_TESTS=OFF -DMSGPACK_BUILD_EXAMPLES=OFF -DCMAKE_INSTALL_PREFIX=$(pwd)/../builds/msgpack .
+        - make
+        - make install
+      :artifacts:
+        :includes:
+          - include/*
+        :static_libraries:
+          - lib/libmsgpack-c.a
+
+:flags:
+  :release:
+    :compile:
+      :*:
+        - -Wall
+        - -Werror
+        - -O3
+        - -fPIC
+        - -flto
+        - -funroll-loops
+        - -fstack-protector-all
+    :link:
+      :*:
+        - -O3
+        - -pie
+        - -pthread
+        - -fPIC
+        - -rdynamic
+        - -flto
+  :test:
+    :compile:
+      :*:
+        - -g
+        - -fsanitize=address
+        - -fno-omit-frame-pointer
+    :link:
+      :*:
+        - -fsanitize=address
+        - -Wl,--no-as-needed
+        - -pthread
+
+:tools:
+  :pre_release:
+    :executable: scripts/gen-version-header

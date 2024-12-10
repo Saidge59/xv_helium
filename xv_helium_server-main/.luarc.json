@@ -1,0 +1,6 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
+  "workspace.library": ["lua-jwt"],
+  "runtime.version": "Lua 5.3",
+  "diagnostics.disable": ["lowercase-global"]
+}

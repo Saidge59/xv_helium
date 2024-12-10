@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+
+luarocks install lsqlite3
+luarocks install lua-crypt
+luarocks install setuid
+
+# Installing lua-jwt
+cd /usr/bin/lua-jwt
+luarocks build
+
+# Installing he_utils
+mkdir -p /usr/share/lua/5.3
+cp /usr/bin/he_utils.lua /usr/share/lua/5.3/he_utils.lua

@@ -1,0 +1,5 @@
+Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Source: http://www.expressvpn.com/
+
+Files: *
+Copyright: 2020 ExpressVPN International Ltd.

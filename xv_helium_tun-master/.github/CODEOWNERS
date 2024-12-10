@@ -1,0 +1,5 @@
+# https://docs.github.com/en/free-pro-team@latest/github/creating-cloning-and-archiving-repositories/about-code-owners
+
+# Owners required for all PR reviews for any/all code in this repo
+* @xvpn/trusted-server-core
+* @xvpn/csr-team

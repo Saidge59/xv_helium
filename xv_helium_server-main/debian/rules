@@ -1,0 +1,27 @@
+#!/usr/bin/make -f
+
+DEB_DESTDIR=debian/helium-server
+
+
+%:
+	dh $@
+
+
+override_dh_auto_configure:
+
+
+override_dh_auto_build:
+	/usr/local/bin/ceedling clobber
+	/usr/local/bin/ceedling verbosity[4] dependencies:fetch
+	/usr/local/bin/ceedling verbosity[4] dependencies:make
+	/usr/local/bin/ceedling verbosity[4] release
+
+override_dh_auto_install:
+	mkdir -p $(DEB_DESTDIR)/usr/sbin/
+	mkdir -p $(DEB_DESTDIR)/usr/bin/
+	mkdir -p $(DEB_DESTDIR)/usr/lib/tmpfiles.d/
+	cp build/artifacts/release/helium-server.out $(DEB_DESTDIR)/usr/sbin/helium
+	cp -r lua/* $(DEB_DESTDIR)/usr/bin/
+	cp helium.tmpfiles.conf $(DEB_DESTDIR)/usr/lib/tmpfiles.d/helium.conf
+
+override_dh_auto_clean:

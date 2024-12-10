@@ -1,0 +1,61 @@
+#!/bin/bash
+
+set -e
+set -o pipefail
+
+usage() {
+    echo "Usage: git-version [-s] [-d <Directory>] [-h]"
+}
+
+get_semver() {
+    echo "$1" | grep -Eo '([0-9]+)\.([0-9]+)\.([0-9]+)'
+}
+
+DIR=""
+SEMVER=0
+
+while getopts "hsd:" c ; do
+    case $c in
+       h) usage
+          exit 0 ;;
+       s) SEMVER=1 ;;
+       d) DIR=$OPTARG ;;
+       *) usage
+          exit 1 ;;
+    esac
+done
+
+if [[ -z "${DIR}" ]] ; then
+    usage
+    exit 1
+fi
+
+VERSION=""
+
+if [[ "${DIR}" == "." && -n "${CIRCLE_TAG#v}" ]] ; then
+    VERSION="${CIRCLE_TAG#v}"
+    if [[ $SEMVER -eq 1 ]] ; then
+        get_semver "$VERSION"
+    else
+        echo "${VERSION}"
+    fi
+    exit 0
+fi
+
+VERSION=$(git -C "$DIR" describe --tags --long --first-parent 2>/dev/null || true)
+
+if [[ -z "$VERSION" ]]; then
+    if [[ $SEMVER -eq 1 ]] ; then
+        echo "0.0.0"
+    else
+        BRANCH=$(git  -C "$DIR" rev-parse --abbrev-ref HEAD)
+        COMMIT=$(git  -C "$DIR" rev-parse --short HEAD)
+        echo "git:${BRANCH}/${COMMIT}"
+    fi
+else
+    if [[ $SEMVER -eq 1 ]] ; then
+        get_semver "$VERSION"
+    else
+        echo "${VERSION}"
+    fi
+fi

@@ -1,0 +1,43 @@
+---
+name: Security
+
+on:
+  # For diff-aware scans in pull requests, edit accordingly
+  #
+  # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#onpull_requestpull_request_targetbranchesbranches-ignore
+  pull_request: {}
+
+  # For pushes to branches such as "main", "master", "dev", "develop", or any
+  # branches with the "release/" prefix, edit accordingly
+  #
+  # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#using-filters
+  push:
+    branches:
+      - main
+      - master
+      - dev
+      - develop
+      - "release/**"
+
+  # For on-demand scans via the GitHub API, CLI, or UI and
+  # is only available if the workflow is in the default branch
+  #
+  # https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#workflow_dispatch
+  workflow_dispatch: {}
+
+jobs:
+  security_analysis:
+    # Do not change this, the name will be used to enforce PR checks via GitHub IaC
+    # specifically "Security Analysis / All Checks Passed"
+    name: Security Analysis
+
+    # Use triggering actor instead since re-runs can be triggered by someone else,
+    # and we want these runs to be scanned
+    if: ${{ github.triggering_actor != 'dependabot[bot]' }}
+
+    # Always use the reusable workflow in the main branch
+    uses: xvpn/kp_sec_sast/.github/workflows/security_analysis_reusable_workflow.yml@main
+
+    # Implicitly pass all secrets to the reusable workflow
+    # https://github.com/xvpn/kp_sec_sast?tab=readme-ov-file#reusable-security-analysis-workflow
+    secrets: inherit

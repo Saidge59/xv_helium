@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -e
+tunname=${TESTING_TUN_DEVICE:-"he-dip-a236d12d"}
+subnet=${TESTING_DIP_INSIDE_CIDR:-"172.16.2.0/28"}
+wifidev=$(ip route get 8.8.8.8 | grep -P -o 'dev (.*?) ' | cut -d ' ' -f 2)
+basenet=$(ip addr show ${wifidev} | grep -P -o "inet (.*?) " | cut -d ' ' -f 2 | cut -d '/' -f 1)
+echo "FOUND DEV AND IP ${wifidev} ${basenet}"
+gateway=$(ip route get 8.8.8.8 | grep -P -o 'via (.*?) ' | cut -d ' ' -f 2)
+echo "FOUND GATEWAY: " ${gateway}
+
+iptables -P INPUT ACCEPT
+iptables -P OUTPUT ACCEPT
+iptables -P FORWARD ACCEPT
+iptables -t nat -A POSTROUTING -s ${subnet} -o ${wifidev} -j SNAT --to ${basenet}
+
+#nohup tcpdump -vni eth0 &

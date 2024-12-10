@@ -1,0 +1,105 @@
+version: 2.1
+jobs:
+  notify-artifact-store:
+    docker:
+      - image: python:3
+    environment:
+      CIRCLE_ARTIFACTS: /tmp/circle-artifacts
+    steps:
+      - checkout
+      - attach_workspace:
+          at: /tmp/circle-artifacts
+      - store_artifacts:
+          path: /tmp/circle-artifacts
+          destination: /
+      - run:
+          name: "Notifying XV Artifact Store"
+          command: |
+            export VERSION=$(scripts/git-version -d .)
+            DISTRO=bookworm python3 .circleci/post_xv_artifacts.py
+
+  integration-tests:
+    machine:
+      image: ubuntu-2204:current
+    steps:
+      - checkout
+      - run:
+          name: Generate JSON Payload
+          command: echo "{\"branch\":\"master\",\"parameters\":{\"server_commit\":\"${CIRCLE_SHA1}\"}}" > build_num.json
+      - run: cat build_num.json
+      - run:
+          name: Kick off integration tests
+          command: |
+            PIPELINE_ID=$(curl -X POST -u $CIRCLE_CI_API_TOKEN: -H 'Content-Type: application/json' -d @build_num.json https://circleci.com/api/v2/project/gh/xvpn/xv_helium_testbed/pipeline | jq -r '.id')
+            echo "export PIPELINE=$PIPELINE_ID" >> $BASH_ENV
+      - run:
+          name: Check integration test results
+          no_output_timeout: 30m
+          command: |
+            echo "PIPELINE=$PIPELINE"
+            STATUS="running"
+            PRINT_URL="true"
+
+            while [ "$STATUS" == "running" ]; do
+              sleep 10
+              read STATUS ID PIPELINE_NUMBER < <(echo $(curl -s "https://circleci.com/api/v2/pipeline/$PIPELINE/workflow?circle-token=$CIRCLE_CI_API_TOKEN" | jq -r '.items[].status, .items[].id, .items[].pipeline_number'))
+              if [[ "$PRINT_URL" == "true" ]]; then
+                echo "Helium Testbed CCI URL: https://app.circleci.com/pipelines/github/xvpn/xv_helium_testbed/$PIPELINE_NUMBER/workflows/$ID"
+                PRINT_URL="false"
+              fi
+            done
+
+            echo "Exit status=$STATUS"
+            if [[ "$STATUS" == "success" ]]; then
+              exit 0
+            else
+              exit 1
+            fi
+
+  build:
+    machine:
+      image: ubuntu-2204:current
+    parameters:
+      distro:
+        type: string
+        default: bookworm
+    steps:
+      - checkout
+      - run: 
+          name: Install Earthly
+          command: |
+            sudo /bin/sh -c 'wget https://github.com/earthly/earthly/releases/latest/download/earthly-linux-amd64 -O /usr/local/bin/earthly && chmod +x /usr/local/bin/earthly'
+      - run: earthly +test --distro=<< parameters.distro >>
+      - store_test_results:
+          path: build/test
+      - run: earthly +build-helium-server --distro=<< parameters.distro >>
+      - store_artifacts:
+          path: artifacts/
+          destination: /
+      - run: |
+          mkdir -p /tmp/circle-artifacts/<< parameters.distro >>
+          cp artifacts/*.deb /tmp/circle-artifacts/<< parameters.distro >>
+      - persist_to_workspace:
+          root: /tmp/circle-artifacts
+          paths:
+            - << parameters.distro >>
+
+default-filters: &default-filters
+  tags:
+    only: /^v.*/
+
+workflows:
+  build_all:
+    jobs:
+      - build:
+          matrix:
+            parameters:
+              distro: [bookworm]
+          filters: *default-filters
+      - notify-artifact-store:
+          context: XAPIKEY
+          requires:
+            - build
+          filters: *default-filters
+      - integration-tests:
+          context: CIRCLE_CI_API_ACCESS

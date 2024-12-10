@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+
+set -e
+
+usage() {
+    cat <<EOF
+Usage: 
+   $0 version
+
+Example:
+   $0 v1.4-0
+EOF
+}
+
+echo_error() {
+    echo >&2 -e -n "\e[31;1m"
+    echo >&2 -e -n "$*"
+    echo >&2 -e "\e[0m"
+}
+
+echo_info() {
+    echo >&2 -e -n "\e[37;1m"
+    echo >&2 -e -n "$*"
+    echo >&2 -e "\e[0m"
+}
+
+is_ver() {
+    [[ "$1" =~ ^v([0-9]+\.){1,2}[0-9]+(-[0-9]+)?$ ]]
+}
+
+repo=xv_helium_server
+TICKET=GSP-000
+TAG=$1
+LAST_TAG=${LAST_TAG:-$(git describe --tags --first-parent --abbrev=0)}
+
+GIT=$(which git)
+JQ=$(which jq || (
+    echo_error "jq not installed"
+    exit 1
+))
+
+if ! is_ver "${LAST_TAG}"; then
+    echo_error "Invalid last tag format: ${LAST_TAG}"
+    exit 1
+fi
+
+if [[ -z "${TAG}" ]]; then
+    usage
+    exit 1
+fi
+
+if ! is_ver "${TAG}"; then
+    echo_error "Invalid tag format: ${TAG}"
+    exit 1
+fi
+
+current_step=0
+next_step() {
+    current_step=$((current_step + 1))
+    if [ -n "${REEXEC_FIRST_STEP}" ] && [ "${REEXEC_FIRST_STEP}" -gt ${current_step} ]; then
+        return 1
+    fi
+    unset REEXEC_FIRST_STEP
+    if [ -z "${FIRST_STEP}" ] || [ "${FIRST_STEP}" -le ${current_step} ]; then
+        echo >&2 -e "\e[37;1mstep $current_step\e[0m: \e[32m$*\e[0m"
+        return 0
+    fi
+    echo >&2 -e "\e[37;1mstep $current_step\e[0m: \e[32m$*\e[0m \e[33m(skipped)\e[0m"
+    return 1
+}
+
+if next_step "Check tree is clean"; then
+    diff=$(${GIT} status --porcelain --untracked-files=no)
+    if [[ -n "$diff" ]]; then
+        echo_error "git tree is not clean!"
+        echo_error "Please commit or stash your changes and try again."
+        exit 1
+    fi
+fi
+
+# There isn't actually anything to commit, but we want to be sure we
+# are using the latest script, so pull a branch up to main.
+if next_step "Create branch"; then
+    branch="feature/${TICKET}-release-${TAG}"
+    ${GIT} checkout -t -b "$branch" origin/main
+fi
+
+if next_step "Refresh remote"; then
+    ${GIT} fetch origin main
+fi
+
+if next_step "Reset to origin/main"; then
+    ${GIT} reset --hard origin/main
+fi
+
+if next_step "Reexecute current script"; then
+    export REEXEC_FIRST_STEP=$((current_step + 1))
+    exec "$0" "$@"
+fi
+
+# If ${COMMIT} is set, tag on that specific commit, otherwise
+# tag on current master.
+if [ -z "${COMMIT}" ]; then
+    COMMIT=$(${GIT} rev-parse origin/main)
+fi
+
+if next_step "Tagging ${COMMIT} as ${TAG}"; then
+    echo >&2 -e "\e[93mPlease touch your Yubikey...\e[0m"
+    ${GIT} tag -s "${TAG}" -m "Release ${TAG}" "${COMMIT}"
+fi
+
+if next_step "Sanity check"; then
+    echo >&2 -e "\e[93mChanges since last tag: ${LAST_TAG}...\e[0m"
+    ${GIT} --no-pager log --oneline --no-decorate --no-merges "${LAST_TAG}".."${TAG}"
+fi
+
+echo >&2 -e "\e[93mNow:\e[0m"
+echo >&2 -e "  - \e[93mRun \`\e[33;1mgit push origin tag ${TAG}\e[0m\e[93m\`.\e[0m"
+echo >&2

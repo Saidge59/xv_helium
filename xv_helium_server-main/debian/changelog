@@ -1,0 +1,883 @@
+helium-server (1.43-3) unstable; urgency=low
+
+  * Remove liboqs
+  * Bump lightway-core to v1.17.3 to support ML-KEM and Kyber
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 06 Dec 2024 11:56:08 +0800
+
+helium-server (1.43-2) unstable; urgency=low
+
+  * Set min hpt version to 1.6 to prevent installing bugged hpt
+  * Use static buffers on the receive path to save madvise() call
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 04 Nov 2024 13:00:36 +0800
+
+helium-server (1.43-1) unstable; urgency=low
+
+  * Update to hpt 1.6 for new features
+  * Add new config option for HPT `hpt_kthread_idle_usec`
+  * Set min hpt version to 1.6
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 25 Oct 2024 11:00:36 +0800
+
+helium-server (1.42-1) unstable; urgency=low
+
+  * Configurable UDP buffer size
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 22 Oct 2024 13:20:36 +0100
+
+helium-server (1.41-1) unstable; urgency=low
+
+  * Upgrade to hpt 1.5 for improved performance
+
+ -- ExpressVPN <nobody@expressvpn.com>  Thu, 18 Oct 2024 01:50:05 +0800
+
+helium-server (1.40-1) unstable; urgency=low
+
+  * Upgrade to hpt 1.4 for improved performance
+  * Set minimum supported version of hpt to 1.4 due to ioctl changes
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 30 Aug 2024 15:52:05 +0800
+
+helium-server (1.39-1) unstable; urgency=low
+
+  * Receive multiple packets per recvmmsg call
+
+ -- ExpressVPN <nobody@expressvpn.com>  Wed, 14 Aug 2024 10:09:05 +0100
+
+helium-server (1.38-1) unstable; urgency=low
+
+  * Support for multi IP DIP
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 08 Jul 2024 07:28:20 +0100
+
+helium-server (1.36-1) unstable; urgency=low
+
+  * Update DIP Authentication Token Entitlement field from `vpn.dip` to
+    `vpn.dip.details`
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 22 Apr 2024 15:42:00 +0800
+
+helium-server (1.35-1) unstable; urgency=low
+
+  * Update auth_token_config format such that `audiences` and `entitlements`
+    are no longer properties of a key, but properties of the server instance 
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 9 Apr 2024 14:42:00 +0800
+
+helium-server (1.34-1) unstable; urgency=low
+
+  * Changes related to DIP. Releasing again cause previous version is
+    botched
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 22 Mar 2024 10:17:58 +0000
+
+helium-server (1.33.1) unstable; urgency=low
+
+  * Changes for DIP
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 22 Mar 2024 02:46:30 +0000
+
+helium-server (1.32-1) unstable; urgency=low
+
+  * Fix an unable to connect bug when using FM1 PREFIX STREAM with PQC enabled
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 20 Feb 2024 15:16:51 +0800
+
+helium-server (1.31-1) unstable; urgency=low
+
+  * Refactor internal functions to prepare for DIP enablement
+  * Harden DIP Against Client IP Spoofing
+  * Support new DIP Authorization Token format
+
+ -- ExpressVPN <nobody@expressvpn.com>  Thu, 8 Feb 2024 11:30:00 +0800
+
+helium-server (1.30-1) unstable; urgency=low
+
+  * Update Lightway Core v1.16.1
+  * Fix missing secure_renegotiation_started metric bug
+  * Report more metrics to StatsD / Grafana
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 19 Jan 2024 11:49:50 +0800
+
+helium-server (1.29-1) unstable; urgency=low
+
+  * Update Lightway Core v1.16.0
+  * Support multiple auth token keys and check 'aud' claims
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 05 Jan 2024 09:46:09 +0800
+
+helium-server (1.28-1) unstable; urgency=low
+
+  * Update Lightway Core v1.15.4
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 27 Nov 2023 10:47:52 +0800
+
+helium-server (1.27-1) unstable; urgency=low
+
+  * Update Lightway Core v1.15.3
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 21 Nov 2023 12:07:52 +0800
+
+helium-server (1.26-1) unstable; urgency=low
+
+  * Update Lightway Core v1.15.1
+
+ -- ExpressVPN <nobody@expressvpn.com>  Wed, 15 Nov 2023 13:51:38 +0800
+
+helium-server (1.25-1) unstable; urgency=low
+
+  * Update Lightway Core v1.15.0
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 13 Nov 2023 10:49:32 +0800
+
+helium-server (1.24-1) unstable; urgency=low
+
+  * Update Lightway Core v1.14.7
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 06 Nov 2023 09:07:50 +0800
+
+helium-server (1.23-1) unstable; urgency=low
+
+  * Update Lightway Core v1.14.5
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 09 Oct 2023 15:49:56 +0800
+
+helium-server (1.22-1) unstable; urgency=low
+
+  * Update Lightway Core v1.14.4 with token-based authentication
+  * Fix potential SEGFAULT caused by libuv
+  * Add token based authentication support
+  * Add auth and protocol version metrics
+  * Use a hardcoded username for client activities when using token-based auth
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 26 Sep 2023 15:55:49 +0800
+
+helium-server (1.21-1) stable; urgency=low
+
+  * Adds reporting when the KEM cannot be determined
+
+ -- ExpressVPN <nobody@expressvpn.com>  Wed, 07 Sep 2023 14:17:00 +0800
+
+helium-server (1.21) stable; urgency=low
+
+  * Add support for post quantum cryptography
+
+ -- ExpressVPN <nobody@expressvpn.com>  Wed, 30 Aug 2023 04:07:00 +0000
+
+helium-server (1.20-2) unstable; urgency=low
+
+  * Update Lightway Core v1.12.1 with DTLS 1.3 fixes
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 22 Aug 2023 13:07:38 +0800
+
+helium-server (1.20-1) unstable; urgency=low
+
+  * Update Lightway Core v1.12.0 with DTLS 1.3 support
+  * Add metrics for connected protocol
+  * Update msgpack-c to v6.0.0
+  * Update libuv to v1.46.0
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 10 Aug 2023 13:07:38 +0800
+
+helium-server (1.19-1) unstable; urgency=low
+
+  * Update Lightway Core v1.10.3 and WolfSSL v5.6.3
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 20 Jun 2023 15:47:38 +0800
+
+helium-server (1.18-1) unstable; urgency=high
+
+  * Support proxy protocol header
+  * Add obfuscation_id config options
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 06 Jun 2023 08:46:34 +0800
+
+helium-server (1.17-1) unstable; urgency=high
+
+  * Support binding on ipv6
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 16 May 2023 14:50:46 +0800
+
+helium-server (1.16-3) unstable; urgency=high
+
+  * Fix a memory exhaustion issue relating to socket queues
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 7 Mar 2023 13:38:59 +0800
+
+helium-server (1.16-2) unstable; urgency=low
+
+  * Updates libxenon to v1.6.6
+  * Adds libxenon allocations to jemalloc stats
+  * Reduces memory usage from INVERSE_HUFFMAN fm instruction
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 17 Feb 2023 09:53:59 +0800
+
+helium-server (1.16-1) unstable; urgency=high
+
+  * Fix memory leaks when obfuscation is enabled
+  * Fix a bug in the hash comparison function which might cause random TLS errors
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 10 Feb 2023 11:17:59 +0800
+
+helium-server (1.15-1) unstable; urgency=high
+
+  * Bump libxenon v1.6.4 which adds support of INVERSE_HUFFMAN
+    obfsucation
+
+ -- ExpressVPN <nobody@expressvpn.com>  Thu, 03 Feb 2023 17:37:01 +0800
+
+helium-server (1.14-2) unstable; urgency=high
+
+  * Use correct length in tcp_adapter
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 20 Jan 2023 14:28:35 +0800
+
+helium-server (1.14-1) unstable; urgency=high
+
+  * Bump Lightway Core v1.9.2
+  * Bump WolfSSL v5.5.4
+  * Bump libxenon v1.6.0
+  * Send link up event to statsd with cipher information
+
+ -- ExpressVPN <nobody@expressvpn.com>  Thu, 19 Jan 2023 10:40:48 +0800
+
+helium-server (1.13-3) unstable; urgency=low
+
+  * Pin version of HPT
+  * Security hardening of helium server
+  * Bump Lightway Core to v1.8.4
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 06 Dec 2022 10:29:48 +0800
+
+helium-server (1.13-2) unstable; urgency=low
+
+  * Bump Lightway Core v1.8.3
+  * Use FORTIFY_SOURCE=2 when compiling
+  * Enable position independent executables
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 21 Oct 2022 13:29:48 +0800
+
+helium-server (1.13-1) unstable; urgency=high
+
+  * Bump Lightway Core v1.8.2
+  * Prevent client apps using Lightway Core v1.8.0 and earlier from connecting when port scatter is enabled
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 25 Oct 2022 11:59:48 +0800
+
+helium-server (1.12-1) unstable; urgency=high
+
+  * Bump Lightway Core v1.8.0
+  * Implement UDP Port Scatter feature
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 17 Oct 2022 17:18:34 +0800
+
+helium-server (1.11-1) unstable; urgency=high
+
+  * Change how active sessions are counted
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 5 Oct 2022 11:05:55 +0800
+
+helium-server (1.11-0) unstable; urgency=high
+
+  * Bump libxenon to v1.5.0
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 3 Oct 2022 11:20:55 +0800
+
+helium-server (1.10-0) unstable; urgency=high
+
+  * Bump libxenon to v1.4.0
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 27 Sep 2022 09:20:55 +0800
+
+helium-server (1.9-0) unstable; urgency=low
+
+  * Bump libxenon to v1.3.2
+  * Optimize build times
+  * Fix warning: do not link against libm
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 23 Sep 2022 13:26:20 +0800
+
+helium-server (1.8-0) unstable; urgency=low
+
+  * Bump lightway-core to v1.7.0
+  * GSP-1262 Use a per-user plugin chain for sending udp packet
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 2 Sep 2022 15:55:55 +0800
+
+helium-server (1.7-0) unstable; urgency=low
+
+  * Bump libxenon to v1.3.1
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 19 Aug 2022 16:18:55 +0800
+
+helium-server (1.6-1) unstable; urgency=low
+
+  * Bump libuv to v1.44.2
+  * Bump Lightway Core v1.6.2
+  * Use a non-forked version of the statsd-c client
+  * Bump statsd-c client to ef6f82f
+  * Pin msgpack-c to 4.0.0 instead of master
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 12 Aug 2022 16:12:05 +0800
+
+helium-server (1.6-0) unstable; urgency=low
+
+  * Bump Lightway Core v1.6.0 (WolfSSL v5.4.0)
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 12 Jul 2022 14:32:05 +0800
+
+helium-server (1.5-1) unstable; urgency=high
+
+  * Stop pinning luarocks to 3.3.1-xvpn
+  * Remove unused lua dependency 'inspect'
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 31 May 2022 08:23:05 +0800
+
+helium-server (1.5-0) unstable; urgency=low
+
+  * Bump Lightway Core v1.5.1
+  * Bump zlog to latest master
+  * Print he_return_code when logging errors
+  * Stringify helium return codes for logging
+  * Add verbose logging option
+  * Show version info on start
+
+ -- ExpressVPN <nobody@expressvpn.com>  Wed, 25 May 2022 15:21:59 +0800
+
+helium-server (1.4-0) unstable; urgency=low
+
+  * Bump Lightway Core v1.5 (WolfSSL v5.3.0-stable)
+  * Bump HPT v0.4 (MTU Fix)
+  * Bump Jemalloc to v5.3.0
+  * Bump libuv to v1.44.1
+  * Bump Argparse to v1.1.0
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 10 May 2022 12:44:39 +0800
+
+helium-server (1.3-1) unstable; urgency=low
+
+  * Bump Lightway Core v1.4.1 (DTLS Fix and disconnection fixes)
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 26 Apr 2022 13:34:39 +0800
+
+helium-server (1.3-0) unstable; urgency=low
+
+  * Bump Lightway Core v1.3 (WolfSSL v5.2.0-stable and Security
+    Improvements)
+
+ -- ExpressVPN <nobody@expressvpn.com>  Thu, 21 Apr 2022 10:37:35 +0800
+
+helium-server (1.2-13) unstable; urgency=high
+
+  * Check auth buffer length before calling auth_buf_cb (SECBUG-570)
+  * Fix memory leak in udp_write_cb
+  * Fix compiler warnings in tests and a minor bug in he_schedule_client_activity
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 22 Mar 2022 11:45:51 +0800
+
+helium-server (1.2-12) unstable; urgency=low
+
+  * Bump libxenon v1.1.0
+
+ -- ExpressVPN <nobody@expressvpn.com>  Thu, 17 Mar 2022 16:31:41 +0800
+
+helium-server (1.2-11) unstable; urgency=low
+
+  * Shutdown gracefully when receiving SIGTERM(s)
+
+ -- ExpressVPN <nobody@expressvpn.com>  Thu, 17 Mar 2022 16:01:59 +0800
+
+helium-server (1.2-10) unstable; urgency=low
+
+  * Reject new connections if the server is shutting down
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 15 Mar 2022 16:22:53 +0800
+
+helium-server (1.2-9) unstable; urgency=low
+
+  * Remove libxenon from the runtime dependencies, it is statically
+    linked
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 07 Mar 2022 10:25:30 +0000
+
+helium-server (1.2-8) unstable; urgency=low
+
+  * Disconnect all connections when receiving SIGTERM
+
+ -- ExpressVPN <nobody@expressvpn.com>  Wed, 23 Feb 2022 17:14:56 +0800
+
+helium-server (1.2-7) unstable; urgency=low
+
+  * Pin version of libxenon
+
+ -- ExpressVPN <nobody@expressvpn.com>  Wed, 23 Feb 2022 15:37:42 +0800
+
+helium-server (1.2-6) unstable; urgency=low
+
+  * Create config dir under /etc
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 28 Sep 2021 11:55:00 +0800
+
+helium-server (1.2-5) unstable; urgency=low
+
+  * Major refactor and additional tests for connections
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 28 Sep 2021 11:55:00 +0800
+
+helium-server (1.2-4) unstable; urgency=low
+
+  * Separate user repo module and testing improvements for Lua
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 28 Sep 2021 08:58:00 +0800
+
+helium-server (1.2-3) unstable; urgency=low
+
+  * Tons of testing for IP assignment and Lua in general
+  * Migrated to using system Lua instead of statically linked Lua
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 24 Sep 2021 16:37:00 +0800
+
+helium-server (1.2-2) unstable; urgency=low
+
+  * Tons of testing for TCP
+  * Tons of testing for UDP
+  * Documented architecture
+  * Reorganisation of code into subdirectories
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 24 Sep 2021 14:39:00 +0800
+
+helium-server (1.2-1) unstable; urgency=low
+
+  * Use libxenon from deb
+  * Remove xv_hashmap and bring dependency into this repo
+  * Use lightway-core as ceedling dependency instead of a submodule
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 20 Sep 2021 13:51:00 +0800
+
+helium-server (1.2-0) unstable; urgency=low
+
+  * Shift from using xv_libhelium to lightway-core
+
+ -- ExpressVPN <nobody@expressvpn.com>  Wed, 01 Sep 2021 12:20:00 +0800
+
+helium-server (1.1-16) unstable; urgency=high
+
+  * Fix regression where auth_buf users are "auth evicted" every 6 hours
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 23 Aug 2021 11:10:00 +0800
+
+helium-server (1.1-15) unstable; urgency=low
+
+  * Check packet size before sending to HPT
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 13 Aug 2021 18:16:00 +0800
+
+helium-server (1.1-14) unstable; urgency=low
+
+  * Fix regression where client activities username was not populated for
+    auth_buf clients
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 13 Aug 2021 09:59:00 +0800
+
+helium-server (1.1-13) unstable; urgency=low
+
+  * Actually use client_platform_id in client activities
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 10 Aug 2021 09:34:00 +0800
+
+helium-server (1.1-12) unstable; urgency=low
+
+  * Restore WolfSSL to known good version
+
+ -- ExpressVPN <nobody@expressvpn.com>  Thu, 29 Jul 2021 15:59:00 +0800
+
+helium-server (1.1-11) unstable; urgency=low
+
+  * Drop privileges after setup
+
+ -- ExpressVPN <nobody@expressvpn.com>  Wed, 21 Jul 2021 13:37:00 +0800
+
+helium-server (1.1-10) unstable; urgency=low
+
+  * Support for HPT
+  * Upgrade libhelium
+
+ -- ExpressVPN <nobody@expressvpn.com>  Wed, 21 Jul 2021 12:56:00 +0800
+
+helium-server (1.1-9) unstable; urgency=low
+
+  * Add msgpack auth path
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 16 Jul 2021 07:32:00 +0800
+
+helium-server (1.1-8) unstable; urgency=low
+
+  * Add obfs_id to Client Activities
+  * Add client_ip for TCP Connections in Client Activities
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 11 Jun 2021 15:25:00 +0800
+
+helium-server (1.1-7) unstable; urgency=low
+
+  * Change server-side MTU to value provided by configuration file
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 04 Jun 2021 10:50:00 +0800
+
+helium-server (1.1-6) unstable; urgency=low
+
+  * Upgrade libxenon for MTU bug fix
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 24 May 2021 14:09:00 +0800
+
+helium-server (1.1-5) unstable; urgency=low
+
+  * Fix client activities reporting
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 17 May 2021 16:56:00 +0800
+
+helium-server (1.1-4) unstable; urgency=low
+
+  * Add support for libxenon over TCP
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 04 May 2021 15:01:00 +0800
+
+helium-server (1.1-3) unstable; urgency=low
+
+  * Use new version of libhelium API
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 26 Apr 2021 15:25:00 +0800
+
+helium-server (1.1-2) unstable; urgency=low
+
+  * Support for libxenon plugins
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 26 Apr 2021 13:51:00 +0800
+
+helium-server (1.1-1) unstable; urgency=low
+
+  * Harden uv_timer usage to prevent rare errors on TCP disconnects
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 20 Apr 2021 11:41:00 +0800
+
+helium-server (1.1-0) unstable; urgency=low
+
+  * Prevent double-free possibility on auth failure
+  * Eliminate session rotation causing stats miscalculation
+  * Pick up dependency bug fixes
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 26 Mar 2021 11:16:00 +0800
+
+helium-server (1.1-0-rc1) unstable; urgency=low
+
+  * Perform extra null checks for connection creation
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 26 Mar 2021 11:16:00 +0800
+
+helium-server (1.0-48) unstable; urgency=low
+
+  * Address stats regression
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 23 Mar 2021 13:59:00 +0800
+
+helium-server (1.0-47) unstable; urgency=low
+
+  * Upgrade dependency to address keepalive regression
+  * No longer report closed TCP connections as SSL errors
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 15 Mar 2021 15:13:00 +0800
+
+helium-server (1.0-46) unstable; urgency=low
+
+  * Internal cleanup to eliminate direct usage of WolfSSL
+
+ -- ExpressVPN <nobody@expressvpn.com>  Thu, 11 Mar 2021 11:31:00 +0800
+
+helium-server (1.0-45) unstable; urgency=low
+
+  * Upgrade dependency to address chacha20 regression
+
+ -- ExpressVPN <nobody@expressvpn.com>  Thu, 11 Mar 2021 11:31:00 +0800
+
+helium-server (1.0-44) unstable; urgency=low
+
+  * Internal changes to re-use shared library code with client
+  * Correctly report TCP protocol in client activities
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 5 Mar 2021 13:41:00 +0800
+
+helium-server (1.0-43) unstable; urgency=low
+
+  * Explicitly re-key for TLS connections
+  * Evict clients without renegotiation support after a configurable time
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 16 Feb 2021 13:41:00 +0800
+
+helium-server (1.0-42) unstable; urgency=low
+
+  * Alter authentication logic to avoid rare timing bug
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 16 Feb 2021 13:41:00 +0800
+
+helium-server (1.0-41) unstable; urgency=low
+
+  * Minor build file cleanup for dependencies
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 28 Jan 2021 15:21:00 +0800
+
+helium-server (1.0-40) unstable; urgency=low
+
+  * Add initial TCP support
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 04 Jan 2021 10:13:00 +0800
+
+helium-server (1.0-39) unstable; urgency=low
+
+  * Add periodic secure renegotiation
+  * Add metrics for secure renegotiation
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 14 Dec 2020 11:23:00 +0800
+
+helium-server (1.0-38) unstable; urgency=low
+
+  * Fix bug in session creation
+
+ -- ExpressVPN <nobody@expressvpn.com>  Wed, 09 Dec 2020 19:09:00 +0800
+
+helium-server (1.0-37) unstable; urgency=low
+
+  * Enable secure renegotiation
+
+ -- ExpressVPN <nobody@expressvpn.com>  Thu, 03 Dec 2020 04:36:00 +0000
+
+helium-server (1.0-35) unstable; urgency=low
+
+  * Switch to recvmmsg
+  * Switch to WolfSSL static buffers
+  * Upgrade to libuv 1.40
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 13 Nov 2020 12:48:00 +0800
+
+helium-server (1.0-33) unstable; urgency=low
+
+  * Optimise the number of buckets used by the hashmaps
+  * Update IPv4 hashing function to be little endian
+
+ -- ExpressVPN <nobody@expressvpn.com>  Thu, 12 Nov 2020 22:56:00 +0800
+
+helium-server (1.0-32) unstable; urgency=low
+
+  * Sped up connection timeouts
+  * Made initial connection more resilient to lost packets
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 10 Nov 2020 06:13:32 +0000
+
+helium-server (1.0-31) unstable; urgency=low
+
+  * Clarified build dependencies
+
+ -- ExpressVPN <nobody@expressvpn.com>  Thu, 22 Oct 2020 03:15:42 +0000
+
+helium-server (1.0-30) unstable; urgency=medium
+
+  * Refactor
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 20 Oct 2020 14:19:16 +0800
+
+helium-server (1.0-29) unstable; urgency=medium
+
+  * Modify client activities to include local address
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 12 Oct 2020 10:27:17 +0800
+
+helium-server (1.0-28) unstable; urgency=medium
+
+  * Fix eviction routine
+
+ -- ExpressVPN <nobody@expressvpn.com>  Thu, 17 Sep 2020 09:39:18 +0800
+
+helium-server (1.0-27) unstable; urgency=medium
+
+  * Fix new frag path checksum logic
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 15 Sep 2020 14:37:00 +0800
+
+helium-server (1.0-26) unstable; urgency=medium
+
+  * Fix auth watcher leaving hanging files
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 14 Sep 2020 12:56:00 +0800
+
+helium-server (1.0-25) unstable; urgency=medium
+
+  * Fix sequencing error in auth rejection
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 14 Sep 2020 11:11:11 +0800
+
+helium-server (1.0-24) unstable; urgency=medium
+
+  * Fix duplicate UDP checksum code
+
+ -- ExpressVPN <nobody@expressvpn.com>  Sun, 13 Sep 2020 07:54:20 +0800
+
+helium-server (1.0-23) unstable; urgency=medium
+
+  * Fix segmentation fault if users disconnect early in connection
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 11 Sep 2020 16:03:20 +0800
+
+helium-server (1.0-22) unstable; urgency=medium
+
+  * Fix error in checksum recalculation logic
+  * User eviction when account expires
+  * Clear and free connections data immediately on disconnect
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 07 Sep 2020 15:49:47 +0800
+
+helium-server (1.0-21) unstable; urgency=medium
+
+  * Fix an error in session ID rotation
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 18 Aug 2020 15:45:54 +0800
+
+helium-server (1.0-20) unstable; urgency=medium
+
+  * Hard code UDP buffer size to 15MB
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 10 Aug 2020 12:30:27 +0800
+
+helium-server (1.0-19) unstable; urgency=medium
+
+  * Replace UTHash with custom hashmap.
+  * Add optional session ID rotation to protocol.
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 10 Aug 2020 10:38:38 +0800
+
+helium-server (1.0-18) unstable; urgency=medium
+
+  * Fix fragmentation logic
+  * Add suport for client activities
+  * Add additional sanity checks to auth logic
+  * Fix potential Lua stack overflow
+
+ -- ExpressVPN <nobody@expressvpn.com>  Thu, 23 Jul 2020 18:24:00 +0800
+
+helium-server (1.0-17) unstable; urgency=medium
+
+  * Fix bug where multiple auth requests from a single client causes ultimate hashmap corruption
+
+ -- ExpressVPN <nobody@expressvpn.com>  Wed, 22 Jul 2020 05:32:00 +0800
+
+helium-server (1.0-16) unstable; urgency=medium
+
+  * Fragmentation support fixes
+  * Homogenized client-side IP addresses
+
+ -- ExpressVPN <nobody@expressvpn.com>  Thu, 16 Jul 2020 19:37:11 +0800
+
+helium-server (1.0-15) unstable; urgency=medium
+
+  * Add initial MSS support
+  * Add initial Frag support
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 07 jul 2020 11:19:00 +0800
+
+helium-server (1.0-14) unstable; urgency=medium
+
+  * Add age to client sessions
+  * Add metrics for age of sessions
+  * Add metrics for memory allocator
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 26 May 2020 19:49:00 +0800
+
+helium-server (1.0-13) unstable; urgency=medium
+
+  * Add full docker support for testing include profiling support (callgrind)
+  * Fix zlog large allocation and remove 2GB lbss region
+  * Remove dependency on mcmodel=medium
+  * Fix buffer sizes to WIRE_MTU or MTU
+  * Simplify read buffer logic & improve performance
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 26 May 2020 11:14:00 +0800
+
+helium-server (1.0-12) unstable; urgency=medium
+
+  * Stop sending session ID in packet header from the server to the client
+  * Re-open auth database when /xvpn/auth/ changes
+  * Add helium prefix to stats messages
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 19 May 2020 11:22:00 +0800
+
+helium-server (1.0-11) unstable; urgency=medium
+
+  * Abstract memory safe LUA methods for configuration
+  * Statically link dependencies
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 15 May 2020 15:30:00 +0800
+
+helium-server (1.0-10) unstable; urgency=medium
+
+  * Fix equality check in D/TLS timer
+  * Workaround a bug/issue in UTHASH where entire hash is cleared
+
+ -- ExpressVPN <nobody@expressvpn.com>  Thu, 14 May 2020 11:08:00 +0800
+
+helium-server (1.0-9) unstable; urgency=medium
+
+  * Replace HASH_ADD with HASH_REPLACE to remove risk of double insert
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 12 May 2020 16:15:00 +0800
+
+helium-server (1.0-8) unstable; urgency=medium
+
+  * Link ut_hash with jemalloc so helium-server uses a single allocator
+
+ -- ExpressVPN <nobody@expressvpn.com>  Fri, 08 May 2020 15:22:00 +0800
+
+helium-server (1.0-7) unstable; urgency=medium
+
+  * Update Lua auth code to use bound variables
+  * Update Source IP/Port hashmap when a session is recovered
+
+ -- ExpressVPN <nobody@expressvpn.com>  Thu, 07 May 2020 11:56:00 +0800
+
+helium-server (1.0-6) unstable; urgency=medium
+
+  * Add metrics for recovered sessions
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 04 May 2020 09:30:00 +0800
+
+helium-server (1.0-5) unstable; urgency=medium
+
+  * Add basic metrics support
+  * Fix header issue with session reject
+  * Ability to shutdown bad connections
+  * Various security hardening improvements and fixes
+
+ -- ExpressVPN <nobody@expressvpn.com>  Sun, 03 May 2020 21:09:00 +0800
+
+helium-server (1.0-4) unstable; urgency=medium
+
+  * Enable PONG responses
+  * Flush logs on start up
+
+ -- ExpressVPN <nobody@expressvpn.com>  Wed, 29 Apr 2020 14:34:00 +0800
+
+helium-server (1.0-3) unstable; urgency=medium
+
+  * BETA Server Release
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 27 Apr 2020 14:32:35 +0800
+
+helium-server (1.0-2) unstable; urgency=medium
+
+  * Fixed coffee shop MTU issues
+  * Server now disconnects clients following a failed auth attempt
+
+ -- ExpressVPN <nobody@expressvpn.com>  Thu, 16 Apr 2020 14:22:54 +0800
+
+helium-server (1.0-1) unstable; urgency=medium
+
+  * Initial release.
+
+ -- ExpressVPN <nobody@expressvpn.com>  Tue, 14 Apr 2020 09:44:36 +0800
