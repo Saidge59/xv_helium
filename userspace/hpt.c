@@ -177,8 +177,6 @@ void hpt_drain(struct hpt *state)
 {
 	printf("start hpt_drain\n");
 	size_t num = hpt_rb_count(state->tx_ring, state->rb_size);
-	printf("hpt_rb_count: %ld\n", num);
-	printf("state->rb_size: %ld\n", state->rb_size);
 
 	for (size_t j = 0; j < num; j++) {
 		struct hpt_ring_buffer_element *elem = hpt_rb_rx(

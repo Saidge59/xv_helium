@@ -1,0 +1,11 @@
+{
+    "files.associations": {
+        "version.h": "c",
+        "hpt.h": "c",
+        "hpt_common.h": "c",
+        "array": "c",
+        "string": "c",
+        "string_view": "c",
+        "random": "c"
+    }
+}
