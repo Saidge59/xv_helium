@@ -93,6 +93,7 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
 	ring =  hpt->rx_ring;
 
 	num = hpt_rb_count(ring, hpt->ring_buffer_items);
+	pr_info("num: %zu\n", num);
 
 	for (i = 0; i < num; i++) {
 		elem = hpt_rb_rx(ring, hpt->ring_buffer_items,
@@ -129,6 +130,8 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
 			hpt_rm_cur_ring_pkt(ring, elem);
 			continue;
 		}
+
+		pr_info("elem: %zu, len: %zu\n", i, len);
 
 		/* Copy the packet into the SKB */
 		memcpy(skb_put(skb, len), elem->data, len);

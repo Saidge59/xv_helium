@@ -7,43 +7,16 @@
 #include <linux/version.h>
 #include <linux/mman.h>
 #include <sys/mman.h>
+#include <time.h> // For performance timing
 
 #include "hpt.h"
 
-struct hpt {
-	char name[HPT_NAMESIZE];
-
-	/* Callbacks to be called on incoming packets */
-	hpt_do_pkt read_cb;
-
-	/* The supplied read handle, this is given to read_cb so it can recover it's context */
-	void *read_hdl;
-
-	/* Ring buffers userspace address pointers */
-	size_t rb_size;
-
-	/* The metadata for the transmit ring */
-	struct hpt_ring_buffer *tx_ring;
-
-	/* The metadata for the receive ring */
-	struct hpt_ring_buffer *rx_ring;
-
-	/* The start of the transmit ring data in memory */
-	uint8_t *tx_start;
-
-	/* The start of the receive ring data in memory */
-	uint8_t *rx_start;
-
-	/* The ring memory location for munmap */
-	void *ring_memory;
-
-	/* The ring memory size for munmap */
-	size_t ring_memory_size;
-
-	uint8_t *kthread_needs_wake;
-};
-
 static volatile int hpt_fd = -1;
+
+// Utility to measure elapsed time
+static double get_time_elapsed(struct timespec *start, struct timespec *end) {
+    return (end->tv_sec - start->tv_sec) + (end->tv_nsec - start->tv_nsec) / 1e9;
+}
 
 int hpt_wake_fd()
 {
@@ -52,6 +25,9 @@ int hpt_wake_fd()
 
 int hpt_init()
 {
+	struct timespec start, end;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+
 	if (hpt_fd < 0) {
 		hpt_fd = open("/dev/" HPT_DEVICE, O_RDWR);
 		if (hpt_fd < 0) {
@@ -60,12 +36,17 @@ int hpt_init()
 		}
 	}
 
-	return 0;
+	clock_gettime(CLOCK_MONOTONIC, &end);
+    printf("HPT initialization took %.9f seconds\n", get_time_elapsed(&start, &end));
+    return 0;
 }
 
 struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t ring_buffer_items,
 		      hpt_do_pkt read_cb, void *handle, size_t idle_usec)
 {
+	struct timespec start, end;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+
 	int ret;
 	struct hpt_device_info dev_info;
 	struct hpt *hpt = NULL;
@@ -91,9 +72,10 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t ring_buffer_items,
 	size_t mem_size = (2 * sizeof(struct hpt_ring_buffer)) +
 			  (2 * hpt_rb_ring_buffer_stride(ring_buffer_items)) + sizeof(uint8_t);
 
+	//uint8_t *ring_memory = mmap(NULL, mem_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
 	/** The kernel allocates the rings and we mmap the allocated memory into userspace **/
-	uint8_t *ring_memory = mmap(NULL, mem_size, PROT_READ | PROT_WRITE,
-				    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	uint8_t *ring_memory = mmap(NULL, mem_size, PROT_READ | PROT_WRITE, MAP_SHARED, hpt_fd, 0);
 
 	uint8_t *wake_flag = ring_memory + mem_size - sizeof(uint8_t);
 
@@ -112,6 +94,9 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t ring_buffer_items,
 
 	strncpy(dev_info.name, name, HPT_NAMESIZE - 1);
 	dev_info.name[HPT_NAMESIZE - 1] = 0;
+
+	return NULL;
+	//=====================================================================
 
 	ret = ioctl(hpt_fd, HPT_IOCTL_CREATE, &dev_info);
 
@@ -141,6 +126,9 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t ring_buffer_items,
 
 	printf("HPT: Ready\n");
 
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    printf("HPT allocation took %.9f seconds\n", get_time_elapsed(&start, &end));
+
 	return hpt;
 
 error:
@@ -158,6 +146,9 @@ error:
 
 void hpt_close(struct hpt *hpt_dev)
 {
+	struct timespec start, end;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+
 	if (hpt_fd < 0) {
 		return;
 	}
@@ -171,11 +162,18 @@ void hpt_close(struct hpt *hpt_dev)
 		}
 		free(hpt_dev);
 	}
+	
+	clock_gettime(CLOCK_MONOTONIC, &end);
+    printf("HPT close took %.9f seconds\n", get_time_elapsed(&start, &end));
 }
 
 void hpt_drain(struct hpt *state)
 {
 	printf("start hpt_drain\n");
+	struct timespec start, end;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+
+
 	size_t num = hpt_rb_count(state->tx_ring, state->rb_size);
 
 	for (size_t j = 0; j < num; j++) {
@@ -191,15 +189,31 @@ void hpt_drain(struct hpt *state)
 		hpt_rb_inc_read(state->tx_ring, state->rb_size,
 				state->tx_start);
 	}
+
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    printf("HPT drain processed %zu packets in %.9f seconds\n", num, get_time_elapsed(&start, &end));
 }
 
 void hpt_write(struct hpt *state, uint8_t *ip_pkt, size_t len)
 {
 	printf("start hpt_write\n");
-	hpt_rb_tx(state->rx_ring, state->rb_size, state->rx_start, ip_pkt, len);
-	ioctl(hpt_fd, HPT_IOCTL_NOTIFY, NULL);
-	/*if (ACQUIRE(state->kthread_needs_wake)) {
-		printf("ioctl HPT_IOCTL_NOTIFY\n");
+	struct timespec start, end;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+
+    //pt_rb_tx(state->rx_ring, state->rb_size, state->rx_start, ip_pkt, len);
+	uint8_t i = 10;
+	while(i > 0)
+	{
 		ioctl(hpt_fd, HPT_IOCTL_NOTIFY, NULL);
-	}*/
+		i--;
+	}
+
+
+/*    
+	if (ACQUIRE(state->kthread_needs_wake)) {
+        ioctl(hpt_fd, HPT_IOCTL_NOTIFY, NULL);
+    }
+*/
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    printf("HPT write took %.9f seconds\n", get_time_elapsed(&start, &end));
 }

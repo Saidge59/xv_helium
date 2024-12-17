@@ -135,17 +135,18 @@ static inline int hpt_rb_tx(struct hpt_ring_buffer *ring,
 	struct hpt_ring_buffer_element *elem;
 
 	if (unlikely(!hpt_rb_free(ring, ring_buffer_items))) {
+		printf("hpt_rb_free(ring, ring_buffer_items)\n");
 		return -1;
 	}
 
 	/* Check if the length of skb is less than mbuf size */
 	if (unlikely(len > HPT_RB_ELEMENT_USABLE_SPACE)) {
+		printf("len > HPT_RB_ELEMENT_USABLE_SPACE\n");
 		return -1;
 	}
 
 	/* Now we know we are in bounds, select the ring slot */
-	elem = hpt_rb_element(tx_start, ACQUIRE(&ring->write),
-			      ring_buffer_items);
+	elem = hpt_rb_element(tx_start, ACQUIRE(&ring->write), ring_buffer_items);
 
 	/* Copy in the element */
 	elem->len = len;

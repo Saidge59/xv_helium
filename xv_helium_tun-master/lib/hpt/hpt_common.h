@@ -6,6 +6,7 @@
 #include <asm/barrier.h>
 #include <linux/string.h>
 #include <linux/jiffies.h>
+#include <linux/slab.h>          // For kmalloc and kfree
 #else
 #define likely(x) __builtin_expect(!!(x), 1)
 #define unlikely(x) __builtin_expect(!!(x), 0)

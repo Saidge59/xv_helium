@@ -13,13 +13,44 @@
 
 #include "hpt_common.h"
 
-struct hpt;
-
 /**
  * The hpt_do_packet callback is called during hpt_drain
  * after each packet is read with the packet data and size.
  */
 typedef void (*hpt_do_pkt)(void *handle, uint8_t *pkt_data, size_t pkt_size);
+
+struct hpt {
+	char name[HPT_NAMESIZE];
+
+	/* Callbacks to be called on incoming packets */
+	hpt_do_pkt read_cb;
+
+	/* The supplied read handle, this is given to read_cb so it can recover it's context */
+	void *read_hdl;
+
+	/* Ring buffers userspace address pointers */
+	size_t rb_size;
+
+	/* The metadata for the transmit ring */
+	struct hpt_ring_buffer *tx_ring;
+
+	/* The metadata for the receive ring */
+	struct hpt_ring_buffer *rx_ring;
+
+	/* The start of the transmit ring data in memory */
+	uint8_t *tx_start;
+
+	/* The start of the receive ring data in memory */
+	uint8_t *rx_start;
+
+	/* The ring memory location for munmap */
+	void *ring_memory;
+
+	/* The ring memory size for munmap */
+	size_t ring_memory_size;
+
+	uint8_t *kthread_needs_wake;
+};
 
 /**
  * Initialize the high performance tun (open a handle to /dev/hpt) but do not create a tun device.

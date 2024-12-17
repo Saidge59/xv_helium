@@ -8,6 +8,12 @@ MODULE_DESCRIPTION("High Performance TUN device");
 
 struct hpt_mod_info hmi;
 
+static int hpt_map_in_pages2(struct hpt_dev *hpt);
+static int hpt_dbgfs_tun_create(struct hpt_dev *hpt, const char *name);
+static int hpt_run_thread(struct hpt_dev *hpt);
+static void hpt_unmap_pages(struct hpt_dev *hpt);
+
+
 static int hpt_kernel_thread(void *param)
 {
 	pr_info("Kernel RX thread started!\n");
@@ -15,7 +21,7 @@ static int hpt_kernel_thread(void *param)
 	size_t timeout = jiffies + dev->kthread_idle_jiffies;
 	const long schedule_timout = usecs_to_jiffies(HPT_KTHREAD_RESCHEDULE_INTERVAL);
 
-	while (true) {
+    while (!kthread_should_stop()) {
 
 		// Wait for some idle time before commiting to sleeping
 		if (time_after_eq(jiffies, timeout)) {
@@ -29,12 +35,6 @@ static int hpt_kernel_thread(void *param)
 			 * this is important or ksoftirqd will never process the packet backlogs
 			 */
 			schedule_timeout_interruptible(schedule_timout);
-		}
-
-		// If we got killed, abort the loop
-		if(kthread_should_stop()) {
-			pr_info("Kernel RX thread killed exiting RX loop\n");
-			break;
 		}
 
 		// Consume any packet and if data was consumed, reset our idle timer
@@ -54,6 +54,8 @@ static inline bool hpt_capable(void)
 
 static int hpt_open(struct inode *inode, struct file *file)
 {
+	struct net_device *net_dev = NULL;
+	struct hpt_dev *hpt;
 	int ret;
 
 	pr_info("Security check\n");
@@ -70,7 +72,182 @@ static int hpt_open(struct inode *inode, struct file *file)
 
 	file->private_data = NULL;
 	pr_info("/dev/hpt opened\n");
+
+	//===============================================
+	net_dev = alloc_netdev(sizeof(struct hpt_dev), HPT_DEVICE,
+	#ifdef NET_NAME_USER
+					NET_NAME_USER,
+	#endif
+			       	hpt_net_init);
+	if (net_dev == NULL) {
+		pr_err("error allocating device \"%s\"\n", HPT_DEVICE);
+		return -EBUSY;
+	}
+
+	dev_net_set(net_dev, current->nsproxy->net_ns);
+
+	hpt = netdev_priv(net_dev);
+
+	init_waitqueue_head(&hpt->tx_busy);
+
+	hpt->net_dev = net_dev;
+
+	size_t ring_buffer_items = 8192;
+	hpt->ring_buffer_items = ring_buffer_items;
+
+	// Bound the number of ring buffer elements so that 2x the number of items can't lead to address overflow
+	if (hpt->ring_buffer_items > HPT_MAX_ITEMS) {
+		pr_err("cannot allocate such a large HPT");
+		ret = -EINVAL;
+		goto clean_up;
+	}
+
+	/* Now we have how many items we need stored map the memory for the ring and wake flag */
+	hpt->num_ring_memory =
+		(sizeof(struct hpt_ring_buffer) * 2) +
+		(hpt->ring_buffer_items * 2 * HPT_RB_ELEMENT_SIZE) + sizeof(uint8_t);
+
+	if (hpt_map_in_pages2(hpt) != 0) {
+		pr_err("could not map in userspace pages");
+		ret = -EINVAL;
+		goto clean_up;
+	}
+
+	pr_info("HPT allocated");
+
+	hpt->tx_ring = (struct hpt_ring_buffer *)hpt->ring_memory;
+	hpt->rx_ring = hpt->tx_ring + 1;
+	hpt->tx_start = hpt_rb_tx_start(hpt->tx_ring, hpt->ring_buffer_items);
+	hpt->rx_start = hpt_rb_rx_start(hpt->tx_ring, hpt->ring_buffer_items);
+	hpt->kthread_needs_wake = hpt->ring_memory + hpt->num_ring_memory - sizeof(uint8_t);
+	size_t idle_usec = 100;
+	hpt->kthread_idle_jiffies = usecs_to_jiffies(idle_usec);
+
+	pr_info("set up pointers");
+
+	strncpy(hpt->name, HPT_DEVICE, HPT_NAMESIZE);
+
+	pr_info("copied in name");
+
+	// Kernel 5.16 and above call dev_addr_check to check MAC address
+	// Since this is a virtual interface, set MAC address to all zeros
+	pr_info("set MAC address to all zeros for virtual interfaces");
+	unsigned char virtual_mac_addr[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+	eth_hw_addr_set(net_dev, virtual_mac_addr);
+
+	ret = hpt_dbgfs_tun_create(hpt, hpt->name);
+	if (ret)
+		goto clean_up;
+
+	ret = register_netdevice(net_dev);
+	if (ret) {
+		pr_err("error %i registering device \"%s\"\n", ret, HPT_DEVICE);
+		goto clean_up;
+	}
+
+	// Initialise the reader thread 
+	init_waitqueue_head(&hpt->read_wait_queue);
+
+	// Launch the RX and epoll handling kthread 
+	ret = hpt_run_thread(hpt);
+
+	if (ret != 0) {
+		pr_err("Couldn't start rx kernel thread: %i\n", ret);
+		unregister_netdevice(net_dev);
+		goto clean_up;
+	}
+
+	file->private_data = hpt;
+
+	net_dev->needs_free_netdev = true;
+	
+
+	pr_info("HPT: Complete");
+	//===============================================
+
 	return 0;
+
+clean_up:
+	if (hpt->ring_memory)
+		hpt_unmap_pages(hpt);
+	if (net_dev)
+		free_netdev(net_dev);
+
+	return ret;
+}
+
+static int hpt_map_in_pages2(struct hpt_dev *hpt)
+{
+	struct page **pages = NULL;
+
+	int retval;
+	//int nid;
+	unsigned long npages;
+	unsigned long mem_size =
+		hpt->num_ring_memory; // Memory size that we derive from ring_buffer_items. This has already been checked such that mem_size < info.mem_size, so the userspace program has left enough space for us.
+
+	if (!mem_size) {
+		pr_err("cannot allocate a zero-sized ring");
+		retval = -1;
+		goto cleanup;
+	}
+
+	npages = 1 + ((mem_size - 1) / PAGE_SIZE);
+
+	if (npages < 1) {
+		pr_err("not enough pages");
+		retval = -1;
+		goto cleanup;
+	}
+
+	pr_info("The mem_size is %lu, the npages is %lu\n", mem_size, npages);
+
+    pages = kmalloc(npages * sizeof(struct page *), GFP_KERNEL);
+
+	if (pages == NULL) {
+        pr_err("Cannot kmalloc for pages\n");
+		retval = -1;
+		goto cleanup;
+	}
+
+	//nid = page_to_nid(pages[0]); // Remap on the same NUMA node.
+	//pr_info("The nid is %d\n", nid);
+
+	for (unsigned long i = 0; i < npages; i++) {
+    	pages[i] = alloc_pages(GFP_KERNEL, 0);
+		if (!pages[i]) {
+			pr_err("alloc_pages failed for page %lu\n", i);
+			retval = -1;
+			goto cleanup;
+		}
+	}
+
+
+	hpt->ring_memory = vm_map_ram(pages, npages, NUMA_NO_NODE);
+
+	if (hpt->ring_memory == NULL) {
+		pr_err("cannot vm_map_ram");
+		retval = -1;
+		goto cleanup;
+	}
+
+	hpt->mapped_pages = pages;
+	hpt->num_mapped_pages = npages;
+
+	return 0;
+
+cleanup:
+
+	if (pages) {
+		for (unsigned long i = 0; i < npages; i++) {
+			if (pages[i]) {
+				__free_page(pages[i]); // Освобождаем каждую страницу
+			}
+    	}
+    	kfree(pages);
+	}
+
+	return retval;
 }
 
 static void hpt_unmap_pages(struct hpt_dev *hpt)
@@ -88,8 +265,13 @@ static void hpt_unmap_pages(struct hpt_dev *hpt)
 
 		pr_info("Freeing page list");
 
+		for (unsigned long i = 0; i < hpt->num_mapped_pages; i++) {
+			if (hpt->mapped_pages[i]) {
+				__free_page(hpt->mapped_pages[i]); // Освобождаем каждую страницу
+			}
+    	}
 		// Next free the kernel mem we used to store the page list
-		vfree(hpt->mapped_pages);
+		kfree(hpt->mapped_pages);
 
 		pr_info("Freed mapped pages");
 
@@ -230,10 +412,10 @@ static int hpt_map_in_pages(struct hpt_dev *hpt, struct hpt_device_info *info)
 		goto cleanup;
 	}
 
-	pages = vmalloc(npages * sizeof(struct page *));
+    pages = kmalloc(npages * sizeof(struct page *), GFP_KERNEL);
 
 	if (pages == NULL) {
-		pr_err("cannot vmalloc");
+        pr_err("Cannot kmalloc for pages\n");
 		retval = -1;
 		goto cleanup;
 	}
@@ -274,7 +456,7 @@ cleanup:
 	}
 
 	if (pages) {
-		vfree(pages);
+    	kfree(pages);
 	}
 
 	return retval;
@@ -519,11 +701,47 @@ static long hpt_compat_ioctl(struct file *inode, uint32_t ioctl_num,
 	return -EINVAL;
 }
 
+static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
+{
+    struct hpt_dev *hpt = file->private_data;
+    unsigned long size = vma->vm_end - vma->vm_start;
+    unsigned long pfn_start;
+
+	if (hpt == NULL) {
+		pr_err("error hpt no such device\n");
+		return -ENODEV;
+	}
+
+    if (!hpt->ring_memory) {
+        pr_err("No ring memory mapped\n");
+        return -EINVAL;
+    }
+	
+pr_info("hpt->num_ring_memory = %lu, requested size = %lu\n", 
+        hpt->num_ring_memory, size);
+
+    if (size > hpt->num_ring_memory) {
+        pr_err("Requested mapping size exceeds ring memory\n");
+        return -EINVAL;
+    }
+
+    pfn_start = virt_to_phys(hpt->ring_memory) >> PAGE_SHIFT;
+
+    /* Remap the user-space memory region to the same physical pages */
+    if (remap_pfn_range(vma, vma->vm_start, pfn_start, size, vma->vm_page_prot)) {
+        pr_err("Failed to remap pfn range\n");
+        return -EAGAIN;
+    }
+
+    return 0;
+}
+
 static const struct file_operations hpt_fops = {
 	.owner = THIS_MODULE,
 	.open = hpt_open,
 	.release = hpt_release,
 	.poll = hpt_poll,
+	.mmap = hpt_mmap, // Added mmap
 	.unlocked_ioctl = hpt_ioctl,
 	.compat_ioctl = hpt_compat_ioctl,
 };
