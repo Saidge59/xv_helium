@@ -6,6 +6,8 @@
         "array": "c",
         "string": "c",
         "string_view": "c",
-        "random": "c"
+        "random": "c",
+        "mman.h": "c",
+        "stdio.h": "c"
     }
 }

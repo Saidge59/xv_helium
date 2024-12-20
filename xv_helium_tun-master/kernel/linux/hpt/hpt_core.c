@@ -184,9 +184,9 @@ static int hpt_allocate_buffers(struct hpt_dev *hpt)
 {
     int i;
 
-    for (i = 0; i < 1; i++) {
+    for (i = 0; i < HPT_BUFFER_COUNT; i++) {
 
-		hpt->buffers[i].data_combined = kmalloc(HPT_BUFFER_SIZE, GFP_KERNEL);
+		hpt->buffers[i].data_combined = vmalloc_user(HPT_BUFFER_SIZE);//kmalloc(HPT_BUFFER_SIZE, GFP_KERNEL);
 		if (!hpt->buffers[i].data_combined) {
 			pr_err("Failed to allocate combined buffer %d\n", i);
 			return -ENOMEM;
@@ -226,10 +226,11 @@ static int hpt_allocate_buffers(struct hpt_dev *hpt)
 static void hpt_free_buffers(struct hpt_dev *hpt)
 {
 	int i;
-	for (i = 0; i < 1; i++) {
+	for (i = 0; i < HPT_BUFFER_COUNT; i++) {
 		
 		if (hpt->buffers[i].data_combined) {
-        	kfree(hpt->buffers[i].data_combined);
+        	//kfree(hpt->buffers[i].data_combined);
+			vfree(hpt->buffers[i].data_combined);
 			atomic_set(&hpt->buffers[i].in_use, 0);
    		}
 		/*
@@ -277,7 +278,8 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma) {
     }
 
     // Calculate the PFN for the combined buffer
-    pfn = virt_to_phys(hpt->buffers[buffer_idx].data_combined) >> PAGE_SHIFT;
+    //pfn = virt_to_phys(hpt->buffers[buffer_idx].data_combined) >> PAGE_SHIFT;
+	pfn = vmalloc_to_pfn(hpt->buffers[buffer_idx].data_combined);
 
     // Map the combined buffer to user space
     if (remap_pfn_range(vma, vma->vm_start, pfn, HPT_BUFFER_SIZE, vma->vm_page_prot)) {
@@ -554,12 +556,11 @@ static int hpt_ioctl_create(struct file *file, struct net *net,
 	
    //We derive the memory we need from the provided ring buffer size but we make sure that the mem_size provided by userspace should fit it
    //This doesn't improve security, but adds a second level of protection for userspace shooting itself in the foot by corrupting runtime memory.
-   
-	if (dev_info.mem_size < hpt->num_ring_memory) {
+   /*if (dev_info.mem_size < hpt->num_ring_memory) {
 		pr_err("the userspace memory provided does not have enough space to fit this ring and wake flag");
 		ret = -EINVAL;
 		goto clean_up;
-	}
+	}*/
 
 	//pr_info("HPT memory: %zu %zu", hpt->ring_buffer_items, hpt->num_ring_memory);
 /*
@@ -673,6 +674,7 @@ static long hpt_ioctl(struct file *file, uint32_t ioctl_num,
 		spin_unlock(&hpt->buffer_lock);
 
 		wake_up_interruptible(&hpt->read_wait_queue);
+		ret = 0;
 		//ret = hpt_ioctl_notify(file, net, ioctl_num, ioctl_param);
 		break;
 	case _IOC_NR(HPT_IOCTL_DESTROY):
@@ -722,14 +724,7 @@ static int __init hpt_init(void)
 	// Initialize the dummy device
     dev_set_name(&core_dev, "hpt_core_device");
     device_initialize(&core_dev);
-/*
-	rc = hpt_allocate_buffers(&global_hpt_dev, &core_dev);
-    if (rc) {
-        pr_err("Failed to allocate buffers during initialization\n");
-        put_device(&core_dev); // Release dummy device
-        return rc;
-    }
-*/
+
 	root = debugfs_create_dir(HPT_DEVICE, NULL);
 	if (IS_ERR(root)) {
 		pr_err("Cannot create debugfs root dir: %ld\n", PTR_ERR(root));

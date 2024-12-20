@@ -54,8 +54,13 @@ int hpt_wake_fd();
 void hpt_drain(struct hpt *state);
 
 /**
+ * New data of payload.
+ */
+void hpt_payload();
+
+/**
  * Write a packet to the HPT.
  */
-void hpt_write(struct hpt *state, uint8_t *ip_pkt, size_t len);
+void hpt_write();
 
 #endif

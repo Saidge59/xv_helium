@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 199309L // Enable CLOCK_MONOTONIC and other POSIX features
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,7 +9,7 @@
 #include <linux/version.h>
 #include <linux/mman.h>
 #include <sys/mman.h>
-
+#include <time.h>
 #include "hpt.h"
 
 struct hpt {
@@ -44,8 +46,15 @@ struct hpt {
 };
 
 static volatile int hpt_fd = -1;
+void *buffers[HPT_BUFFER_COUNT];
 void *in_buffer;
 void *out_buffer;
+long page_size;
+uint8_t buff_ind;
+
+static inline double get_time_diff(struct timespec start, struct timespec end) {
+    return (end.tv_sec - start.tv_sec) * 1e9 + (end.tv_nsec - start.tv_nsec);
+}
 
 int hpt_wake_fd()
 {
@@ -67,14 +76,7 @@ int hpt_init()
 
 void *map_buffers(int fd, int buffer_idx) {
     void *mapped;
-	long page_size = sysconf(_SC_PAGESIZE);  // Узнаём размер страницы
-    if (page_size == -1) {
-        perror("Failed to get page size");
-        return NULL;
-    }
 	
-	printf("page_size: %ld\n", page_size);
-
     mapped = mmap(NULL, HPT_BUFFER_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, buffer_idx * page_size);
     if (mapped == MAP_FAILED) {
         perror("Failed to mmap buffers");
@@ -106,12 +108,7 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t buffer_items_count,
 		       HPT_MAX_ITEMS);
 		return NULL;
 	}
-/*
-	ret = ioctl(hpt_fd, HPT_IOCTL_ALLOCATE, NULL);
-	if (ret < 0) {
-		goto error;
-	}
-*/
+
 	printf("HPT: Mapping in the memory\n");
 
 	size_t mem_size = (2 * sizeof(struct hpt_ring_buffer)) +
@@ -136,36 +133,30 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t buffer_items_count,
 		goto error;
 	}
 
-	/*
-	void *mapped_region = mmap(NULL, 2 * HPT_BUFFER_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, hpt_fd, 0);
-	if (mapped_region == MAP_FAILED) {
-		perror("Failed to mmap buffers");
-		return -1;
-	}
+	page_size = sysconf(_SC_PAGESIZE);  // Узнаём размер страницы
+    if (page_size == -1) {
+        perror("Failed to get page size");
+        return NULL;
+    }
+	printf("page_size: %ld\n", page_size);
 
-	in_buffer = mapped_region;
-	out_buffer = mapped_region + HPT_BUFFER_SIZE;
-*/
-	in_buffer = map_buffers(hpt_fd, 0);
+	/*in_buffer = map_buffers(hpt_fd, 0);
 	if (!in_buffer) {
 		perror("Failed map_buffers");
 		close(hpt_fd);
 		return NULL;
-	}
+	}*/
+	
 	/*
-	void *buffers[HPT_BUFFER_COUNT];
-    for (int i = 0; i < 1; i++) {
+    for (int i = 0; i < 2; i++) {
         buffers[i] = map_buffers(hpt_fd, i);
         if (!buffers[i]) {
             close(hpt_fd);
-            return -1;
+            return NULL;
         }
 
-        printf("Buffer %d mapped: encrypted=%p decrypted=%p\n",
-               i, buffers[i], buffers[i] + HPT_BUFFER_SIZE);
-    }
-*/
-
+        printf("Buffer %d mapped: data_in=%p\n", i, buffers[i]);
+    }*/
 
 	hpt = malloc(sizeof(struct hpt));
 
@@ -204,6 +195,56 @@ error:
 	return NULL;
 }
 
+void hpt_payload()
+{
+	unsigned char ip_header[] = {
+        0x45, 0x00, 0x00, 0x00, 
+        0x1C, 0x46, 0x40, 0x00, 
+        0x40, 0x11, 0x00, 0x00, 
+        0xC0, 0xA8, 0x1F, 0xC8, // 192.168.31.200
+        0xC0, 0xA8, 0x1F, 0xC9  // 192.168.31.201
+    };
+
+    unsigned char udp_header[] = {
+        0x48, 0x1D, 0x6C, 0x5C,
+        0x00, 0x00, 0x00, 0x00
+    };
+
+    //const char *payload = "Hello, hpt!";
+    const size_t len = 1024;
+    char payload[len];
+	char ch = 'a' + buff_ind;
+	printf("payload %c\n", ch); 
+    memset(payload, ch, len);
+    size_t payload_len = strlen(payload);
+
+    size_t udp_len = sizeof(udp_header) + payload_len;
+    size_t ip_len = sizeof(ip_header) + udp_len;
+
+    ip_header[2] = (ip_len >> 8) & 0xFF;
+    ip_header[3] = ip_len & 0xFF;
+
+    udp_header[4] = (udp_len >> 8) & 0xFF;
+    udp_header[5] = udp_len & 0xFF;
+
+    unsigned char packet[ip_len];
+    memcpy(packet, ip_header, sizeof(ip_header));
+    memcpy(packet + sizeof(ip_header), udp_header, sizeof(udp_header));
+    memcpy(packet + sizeof(ip_header) + sizeof(udp_header), payload, payload_len);
+
+	buffers[buff_ind] = map_buffers(hpt_fd, buff_ind);
+	if (!buffers[buff_ind]) {
+		close(hpt_fd);
+		return NULL;
+	}
+
+	//memcpy(in_buffer, packet, sizeof(packet));
+    memcpy(buffers[buff_ind], packet, sizeof(packet));
+
+	printf("Buffer %d mapped: data_in=%p\n", buff_ind, buffers[buff_ind]);
+	buff_ind++;
+}
+
 void hpt_close(struct hpt *hpt_dev)
 {
 	if (hpt_fd < 0) {
@@ -216,9 +257,12 @@ void hpt_close(struct hpt *hpt_dev)
 	hpt_fd = -1;
 
 	if (hpt_dev) {
-		if (in_buffer) {
+		for (int i = 0; i < 2; i++) {
+			munmap(buffers[i], HPT_BUFFER_SIZE);
+        }
+		/*if (in_buffer) {
 			munmap(in_buffer, HPT_BUFFER_SIZE);
-		}
+		}*/
 		free(hpt_dev);
 	}
 }
@@ -243,11 +287,23 @@ void hpt_drain(struct hpt *state)
 	}
 }
 
-void hpt_write(struct hpt *state, uint8_t *ip_pkt, size_t len)
+void hpt_write()
 {
+	struct timespec start, end;
+
 	printf("start hpt_write\n");
-	memcpy(in_buffer, ip_pkt, len);
-	ioctl(hpt_fd, HPT_IOCTL_NOTIFY, NULL);
+
+	clock_gettime(CLOCK_MONOTONIC, &start); // Start timing
+	uint8_t i = 10;
+	while(i > 0)
+	{
+		ioctl(hpt_fd, HPT_IOCTL_NOTIFY, NULL);
+		i--;
+	}
+	//ioctl(hpt_fd, HPT_IOCTL_NOTIFY, NULL);
+	clock_gettime(CLOCK_MONOTONIC, &end);   // End timing
+
+    printf("Time taken to write to buffer: %.2f ns\n", get_time_diff(start, end));
 
 	//hpt_rb_tx(state->rx_ring, state->rb_size, state->rx_start, ip_pkt, len);
 	/*if (ACQUIRE(state->kthread_needs_wake)) {

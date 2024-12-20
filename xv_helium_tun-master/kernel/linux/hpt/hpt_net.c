@@ -86,11 +86,11 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
 
 	pr_info("Processed the hpt_net_rx\n");
 
-    for (int i = 0; i < 1; i++) {
+    for (int i = 0; i < HPT_BUFFER_COUNT; i++) {
         struct hpt_dma_buffer *buffer = &hpt->buffers[i];
 
         // Check if the buffer is in use
-        if (buffer == NULL || !atomic_read(&buffer->in_use)) {
+        if (!buffer|| !atomic_read(&buffer->in_use)) {
 			pr_err("Skip buffers not marked as in use\n");
             continue;
         }
