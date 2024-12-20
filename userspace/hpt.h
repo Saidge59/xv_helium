@@ -13,6 +13,9 @@
 
 #include "hpt_common.h"
 
+#define HPT_BUFFER_COUNT 1024
+#define HPT_BUFFER_SIZE 2048
+
 struct hpt;
 
 /**

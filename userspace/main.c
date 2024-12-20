@@ -20,7 +20,11 @@ int main()
   char name[HPT_NAMESIZE] = HPT_DEVICE;
   hpt = hpt_alloc(name, 8192, on_hpt_packet, NULL, 100);
 
-  const char *test_data = "Test hpt";
+  if(!hpt)
+  {
+    perror("Fatal Error: hpt_alloc\n");
+    hpt_close(hpt);
+  }
 
 
 unsigned char ip_header[] = {
@@ -37,7 +41,7 @@ unsigned char ip_header[] = {
     };
 
     //const char *payload = "Hello, hpt!";
-    const size_t len = 1500;
+    const size_t len = 1024;
     char payload[len];
     memset(payload, 'a', len);
     size_t payload_len = strlen(payload);
@@ -73,7 +77,7 @@ unsigned char ip_header[] = {
 
 void hpt_send(unsigned char *packet, size_t packet_size)
 {
-  uint8_t i = 10;
+  uint8_t i = 1;
   while(i > 0)
   {
     hpt_write(hpt, (uint8_t *)packet, packet_size);
