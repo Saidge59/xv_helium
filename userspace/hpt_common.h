@@ -135,18 +135,17 @@ static inline int hpt_rb_tx(struct hpt_ring_buffer *ring,
 	struct hpt_ring_buffer_element *elem;
 
 	if (unlikely(!hpt_rb_free(ring, ring_buffer_items))) {
-		printf("hpt_rb_free(ring, ring_buffer_items)\n");
 		return -1;
 	}
 
 	/* Check if the length of skb is less than mbuf size */
 	if (unlikely(len > HPT_RB_ELEMENT_USABLE_SPACE)) {
-		printf("len > HPT_RB_ELEMENT_USABLE_SPACE\n");
 		return -1;
 	}
 
 	/* Now we know we are in bounds, select the ring slot */
-	elem = hpt_rb_element(tx_start, ACQUIRE(&ring->write), ring_buffer_items);
+	elem = hpt_rb_element(tx_start, ACQUIRE(&ring->write),
+			      ring_buffer_items);
 
 	/* Copy in the element */
 	elem->len = len;
@@ -228,10 +227,10 @@ static inline void hpt_rb_inc_read(struct hpt_ring_buffer *ring,
  * Struct used to create a HPT device. Passed to the kernel in IOCTL call
  */
 
-struct hpt_device_info {
+struct hpt_network_device_info {
 	char name[HPT_NAMESIZE]; /**< Network device name for HPT */
 
-	size_t ring_buffer_items;
+	size_t buffer_items_count;
 
 	void *mem_start;
 	size_t mem_size;
@@ -240,7 +239,9 @@ struct hpt_device_info {
 
 #define HPT_DEVICE "hpt"
 
-#define HPT_IOCTL_CREATE _IOWR(0x92, 2, struct hpt_device_info)
-#define HPT_IOCTL_NOTIFY _IO(0x92, 3)
+#define HPT_IOCTL_ALLOCATE _IO(0x92, 1)
+#define HPT_IOCTL_CREATE _IOWR(0x92, 2, struct hpt_network_device_info)
+#define HPT_IOCTL_DESTROY _IO(0x92, 3)
+#define HPT_IOCTL_NOTIFY _IO(0x92, 4)
 
 #endif

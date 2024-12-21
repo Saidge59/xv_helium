@@ -15,7 +15,7 @@
 #undef pr_fmt
 #endif
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-#define HPT_VERSION "1.7"
+#define HPT_VERSION "1.8"
 
 #include <linux/if_arp.h>
 #include <linux/if_tun.h>
@@ -36,6 +36,23 @@
 
 #define HPT_KTHREAD_RESCHEDULE_INTERVAL 0 /* us */
 
+#define HPT_BUFFER_COUNT 1024
+#define HPT_BUFFER_SIZE 2048
+
+struct hpt_dma_buffer {
+    void *data_in;               // Original allocated buffer for data_in data
+    void *aligned_data_in;       // Aligned buffer pointer for data_in data
+    dma_addr_t dma_in_addr;      // DMA address for data_in data
+
+    void *data_out;              // Original allocated buffer for data_out data
+    void *aligned_data_out;      // Aligned buffer pointer for data_out data
+    dma_addr_t dma_out_addr;     // DMA address for data_out data
+
+	void *data_combined; 
+    atomic_t in_use;             // Atomic flag to indicate usage
+};
+
+
 /**
  * A structure describing the private information for a hpt device.
  */
@@ -49,8 +66,15 @@ struct hpt_dev {
 	/* the hpt network device */
 	struct net_device *net_dev;
 
+	struct device *dev;
+
 	/* This keeps track of whether we should EPOLLIN currently or not */
 	wait_queue_head_t tx_busy;
+
+	struct hpt_dma_buffer buffers[HPT_BUFFER_COUNT]; // Buffer pool
+    spinlock_t buffer_lock;                          // Lock for buffer pool
+	int event_flag;
+	int buffers_allocated;
 
 	/* Our structure will contain two ring buffers mmapped contiguously
 	 * in memory each with head struct in front.
