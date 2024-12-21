@@ -7,6 +7,7 @@
         "string": "c",
         "string_view": "c",
         "random": "c",
-        "stdint.h": "c"
+        "mman.h": "c",
+        "stdio.h": "c"
     }
 }

@@ -40,14 +40,11 @@ static int hpt_net_config(struct net_device *dev, struct ifmap *map)
  */
 static int hpt_net_tx(struct sk_buff *skb, struct net_device *dev)
 {
+	return NETDEV_TX_OK;
+	/*
 	struct hpt_dev *hpt = netdev_priv(dev);
 	unsigned int len = skb->len;
 
-	/* We check the usable space bounds inside the ring buffer but add a
-	 * redundant check here as hardening
-	 *
-	 * ??? We expect that one of the two will get compiled out
-	 */
 	if (!len || len > HPT_RB_ELEMENT_USABLE_SPACE) {
 		if (len)
 			hpt->hd_tx_len_over++;
@@ -62,7 +59,6 @@ static int hpt_net_tx(struct sk_buff *skb, struct net_device *dev)
 		goto drop;
 	}
 
-	/* Free skb and update statistics */
 	dev_kfree_skb(skb);
 	dev->stats.tx_bytes += len;
 	dev->stats.tx_packets++;
@@ -73,13 +69,105 @@ static int hpt_net_tx(struct sk_buff *skb, struct net_device *dev)
 	return NETDEV_TX_OK;
 
 drop:
-	/* Free skb and update statistics */
 	dev_kfree_skb(skb);
 	dev->stats.tx_dropped++;
 
 	return NETDEV_TX_OK;
+	*/
 }
 
+size_t hpt_net_rx(struct hpt_dev *hpt)
+{
+    struct net_device *dev = hpt->net_dev;
+    struct sk_buff *skb;
+    size_t num_processed = 0;
+    int ret;
+    u8 ip_version;
+
+	pr_info("Processed the hpt_net_rx\n");
+
+    for (int i = 0; i < HPT_BUFFER_COUNT; i++) {
+        struct hpt_dma_buffer *buffer = &hpt->buffers[i];
+
+        // Check if the buffer is in use
+        if (!buffer|| !atomic_read(&buffer->in_use)) {
+			//pr_err("Skip buffers not marked as in use\n");
+            continue;
+        }
+
+		pr_info("buffer: %02x, %02x, %02x, %02x\n", *(uint8_t *)buffer->data_combined, *((uint8_t *)buffer->data_combined+1),*((uint8_t *)buffer->data_combined+2),*((uint8_t *)buffer->data_combined+3));
+
+        hpt->hd_rx_called++;
+
+		size_t len = (((uint8_t*)buffer->data_combined)[2] << 8) | ((uint8_t*)buffer->data_combined)[3];
+		if (unlikely(len == 0 || len > HPT_BUFFER_SIZE)) {
+            if (len)
+                hpt->hd_rx_len_over++;
+            else
+                hpt->hd_rx_len_zero++;
+            dev->stats.rx_dropped++;
+            atomic_set(&buffer->in_use, 0); // Mark the buffer as free
+			pr_err("Skip buffers wrong len\n");
+            continue;
+        }
+		pr_info("The packet length is %zu\n", len);
+
+        skb = netdev_alloc_skb(dev, len);
+        if (unlikely(!skb)) {
+            dev->stats.rx_dropped++;
+            hpt->hd_rx_skb_alloc_err++;
+            atomic_set(&buffer->in_use, 0); // Mark the buffer as free
+			pr_err("Could not allocate memory to transmit a packet\n");
+            continue;
+        }
+		pr_info("netdev_alloc_skb");
+
+        // Copy the decrypted data into the SKB
+        memcpy(skb_put(skb, len), buffer->data_combined, len);
+		pr_info("memcpy");
+
+        // Mark the buffer as free after use
+        atomic_set(&buffer->in_use, 0);
+
+        // Check the IP version (from the start of the buffer)
+        ip_version = skb->len ? (skb->data[0] >> 4) : 0;
+
+        if (unlikely(!(ip_version == 4 || ip_version == 6))) {
+            dev_kfree_skb(skb);
+            dev->stats.rx_dropped++;
+            hpt->hd_rx_non_ip++;
+			pr_err("Drop packets that are not IPv4 or IPv6\n");
+            continue;
+        }
+		pr_info("ip_version");
+
+        // Set SKB headers
+        skb_reset_mac_header(skb);
+        skb->protocol = ip_version == 4 ? htons(ETH_P_IP) : htons(ETH_P_IPV6);
+        skb->ip_summed = CHECKSUM_UNNECESSARY;
+        skb_reset_network_header(skb);
+        skb_probe_transport_header(skb);
+		pr_info("skb_probe_transport_header");
+
+        // Send the SKB to the network stack
+        ret = netif_rx(skb);
+		pr_info("netif_rx");
+
+        if (unlikely(ret == NET_RX_DROP)) {
+            hpt->hd_rx_netif_drop++;
+        }
+
+        // Update statistics
+        dev->stats.rx_bytes += len;
+        dev->stats.rx_packets++;
+        num_processed++;
+    }
+
+	return num_processed;
+}
+
+
+/*
 size_t hpt_net_rx(struct hpt_dev *hpt)
 {
 	struct net_device *dev = hpt->net_dev;
@@ -93,7 +181,6 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
 	ring =  hpt->rx_ring;
 
 	num = hpt_rb_count(ring, hpt->ring_buffer_items);
-	pr_info("num: %zu\n", num);
 
 	for (i = 0; i < num; i++) {
 		elem = hpt_rb_rx(ring, hpt->ring_buffer_items,
@@ -122,27 +209,25 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
 
 		skb = netdev_alloc_skb(dev, len);
 
-		/* Could not allocate memory to transmit a packet */
+		// Could not allocate memory to transmit a packet 
 		if (unlikely(!skb)) {
-			/* If we have to drop a packet due to memory still increment the read header */
+			// If we have to drop a packet due to memory still increment the read header 
 			dev->stats.rx_dropped++;
 			hpt->hd_rx_skb_alloc_err++;
 			hpt_rm_cur_ring_pkt(ring, elem);
 			continue;
 		}
 
-		pr_info("elem: %zu, len: %zu\n", i, len);
-
-		/* Copy the packet into the SKB */
+		// Copy the packet into the SKB 
 		memcpy(skb_put(skb, len), elem->data, len);
 
-		/* Now the ring element is free to be used again */
+		// Now the ring element is free to be used again 
 		hpt_rm_cur_ring_pkt(ring, elem);
 
-		/* Extract the IP version from the start of the packet (IHL) and drop if it's not IPv4 or IPv6 */
+		// Extract the IP version from the start of the packet (IHL) and drop if it's not IPv4 or IPv6 
 		ip_version = skb->len ? (skb->data[0] >> 4) : 0;
 
-		/* Drop packets that are not IPv4 or IPv6 */
+		// Drop packets that are not IPv4 or IPv6 
 		if (unlikely(!(ip_version == 4 || ip_version == 6))) {
 			dev_kfree_skb(skb);
 			dev->stats.rx_dropped++;
@@ -150,7 +235,7 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
 			continue;
 		}
 
-		/* Create SKB headers for this new packet. The SKB will work out its headers from the IP packet data. */
+		// Create SKB headers for this new packet. The SKB will work out its headers from the IP packet data. 
 		skb_reset_mac_header(skb);
 
 		skb->protocol =
@@ -160,20 +245,20 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
 		skb_reset_network_header(skb);
 		skb_probe_transport_header(skb);
 
-		/* Call netif interface */
+		// Call netif interface 
 		ret = netif_rx(skb);
 
 		if (unlikely(ret == NET_RX_DROP)) {
 			hpt->hd_rx_netif_drop++;
 		}
 
-		/* Update statistics */
+		// Update statistics 
 		dev->stats.rx_bytes += len;
 		dev->stats.rx_packets++;
 	}
 
 	return num;
-}
+}*/
 
 #ifdef HAVE_TX_TIMEOUT_TXQUEUE
 static void hpt_net_tx_timeout(struct net_device *dev, unsigned int txqueue)
