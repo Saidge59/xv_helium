@@ -214,7 +214,6 @@ void hpt_payload()
     const size_t len = 1024;
     char payload[len];
 	char ch = 'a' + buff_ind;
-	printf("payload %c\n", ch); 
     memset(payload, ch, len);
     size_t payload_len = strlen(payload);
 
@@ -241,7 +240,7 @@ void hpt_payload()
 	//memcpy(in_buffer, packet, sizeof(packet));
     memcpy(buffers[buff_ind], packet, sizeof(packet));
 
-	printf("Buffer %d mapped: data_in=%p\n", buff_ind, buffers[buff_ind]);
+	printf("Buffer %d mapped: ch %c, data_in=%p\n", buff_ind, ch, buffers[buff_ind]);
 	buff_ind++;
 }
 
@@ -290,8 +289,6 @@ void hpt_drain(struct hpt *state)
 void hpt_write()
 {
 	struct timespec start, end;
-
-	printf("start hpt_write\n");
 
 	clock_gettime(CLOCK_MONOTONIC, &start); // Start timing
 	uint8_t i = 10;

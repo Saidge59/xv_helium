@@ -91,7 +91,7 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
 
         // Check if the buffer is in use
         if (!buffer|| !atomic_read(&buffer->in_use)) {
-			pr_err("Skip buffers not marked as in use\n");
+			//pr_err("Skip buffers not marked as in use\n");
             continue;
         }
 
