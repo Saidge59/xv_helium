@@ -1,0 +1,13 @@
+Source: hpt
+Section: unknown
+Priority: optional
+Maintainer: ExpressVPN <nobody@expressvpn.com>
+Build-Depends: debhelper (>= 11), meson, ninja-build
+Standards-Version: 4.1.3
+
+Package: hpt
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Recommends: hpt-dkms
+Description: High Performance Tun (HPT) user-space library
+ HPT library for use with user-space applications integrating with in-kernel HPT driver

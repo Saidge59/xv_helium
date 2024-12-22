@@ -1,0 +1,8 @@
+option('kernel_dir', type: 'string', value: '',
+	description: 'Path to the kernel for building kernel modules. Headers must be in $kernel_dir/build. Modules will be installed in $DEST_DIR/$kernel_dir/.')
+option('lib_version', type: 'string', value: '1.1',
+	description: 'The so version for the userspace library. Should be incremented with each significant userspace library change. This is modified independently of the DKMS version.')
+option('build_kernel', type: 'boolean', value: true,
+	description: 'Should kernel modules be built?')
+option('build_libs', type: 'boolean', value: true,
+	description: 'Should the library be built?')

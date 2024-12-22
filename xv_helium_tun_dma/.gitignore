@@ -1,0 +1,6 @@
+build/
+dpdk/build/
+*.swp
+debian/hpt/
+debian/.debhelper/
+artifacts/
