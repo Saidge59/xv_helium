@@ -4,6 +4,7 @@
         "string": "c",
         "string_view": "c",
         "hpt_dev.h": "c",
-        "hpt_common.h": "c"
+        "hpt_common.h": "c",
+        "typeinfo": "c"
     }
 }

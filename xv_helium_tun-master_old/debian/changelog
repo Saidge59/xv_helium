@@ -1,0 +1,6 @@
+hpt (0.1) unstable; urgency=medium
+
+  * Initial Release. Do not change this changelog manually.
+  * Version will be set automatically via CI build.
+
+ -- ExpressVPN <nobody@expressvpn.com>  Mon, 24 May 2021 12:14:00 +0800

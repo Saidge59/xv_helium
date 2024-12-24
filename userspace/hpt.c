@@ -234,7 +234,7 @@ void hpt_payload()
 	buffers[buff_ind] = map_buffers(hpt_fd, buff_ind);
 	if (!buffers[buff_ind]) {
 		close(hpt_fd);
-		return NULL;
+		return;
 	}
 
 	//memcpy(in_buffer, packet, sizeof(packet));
@@ -255,8 +255,10 @@ void hpt_close(struct hpt *hpt_dev)
 	close(hpt_fd);
 	hpt_fd = -1;
 
+	int len = buff_ind + 1;
+
 	if (hpt_dev) {
-		for (int i = 0; i < 2; i++) {
+		for (int i = 0; i < len; i++) {
 			munmap(buffers[i], HPT_BUFFER_SIZE);
         }
 		/*if (in_buffer) {
@@ -291,7 +293,7 @@ void hpt_write()
 	struct timespec start, end;
 
 	clock_gettime(CLOCK_MONOTONIC, &start); // Start timing
-	uint8_t i = 10;
+	uint32_t i = 83333;
 	while(i > 0)
 	{
 		ioctl(hpt_fd, HPT_IOCTL_NOTIFY, NULL);

@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# HPT makefile is derived from work by Luca Boccassi
+# Copyright(c) 2018 Luca Boccassi <bluca@debian.org>
+
+ccflags-y := $(MODULE_CFLAGS)
+obj-m := hpt.o
+hpt-y := $(patsubst $(src)/%.c,%.o,$(wildcard $(src)/*.c))

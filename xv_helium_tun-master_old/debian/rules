@@ -1,0 +1,19 @@
+#!/usr/bin/make -f
+
+DEB_DESTDIR=debian/hpt
+DEB_DESTDIR_ABS=$(shell realpath ${DEB_DESTDIR})/usr/
+
+%:
+	dh $@
+
+
+override_dh_auto_configure:
+override_dh_auto_build:
+	echo "Build into: " $(DEB_DESTDIR_ABS)
+	meson setup build -Dbuild_kernel=false -Dprefix=$(DEB_DESTDIR_ABS) -Dincludedir="include/hpt" && cd build && ninja
+
+override_dh_auto_install:
+	(cd build && ninja install)
+
+override_dh_auto_clean:
+	rm -rf build

@@ -221,9 +221,23 @@ static inline void hpt_rb_inc_read(struct hpt_ring_buffer *ring,
 	STORE(&ring->read, ACQUIRE(&ring->read) + 1);
 }
 
+/*
+ * Struct used to create a HPT device. Passed to the kernel in IOCTL call
+ */
+
+struct hpt_device_info {
+	char name[HPT_NAMESIZE]; /**< Network device name for HPT */
+
+	size_t ring_buffer_items;
+
+	void *mem_start;
+	size_t mem_size;
+	size_t idle_usec;
+};
+
 #define HPT_DEVICE "hpt"
 
-#define HPT_IOCTL_CREATE _IO(0x92, 1)
-#define HPT_IOCTL_NOTIFY _IO(0x92, 2)
+#define HPT_IOCTL_CREATE _IOWR(0x92, 2, struct hpt_device_info)
+#define HPT_IOCTL_NOTIFY _IO(0x92, 3)
 
 #endif

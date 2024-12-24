@@ -1,0 +1,9 @@
+sudo rm -rf build
+meson setup build -Dincludedir="include/hpt"
+cd build
+ninja clean
+ninja
+ninja install
+ldconfig
+rmmod kernel/linux/hpt/hpt.ko
+insmod kernel/linux/hpt/hpt.ko

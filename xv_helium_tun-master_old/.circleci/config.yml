@@ -1,0 +1,50 @@
+version: 2.1
+jobs:
+  build:
+    parameters:
+      distro:
+        type: string
+    machine:
+      image: ubuntu-2204:current
+    steps:
+      - checkout
+      - run:
+          name: Install Earthly
+          command: sudo /bin/sh -c 'wget https://github.com/earthly/earthly/releases/latest/download/earthly-linux-amd64 -O /usr/local/bin/earthly && chmod +x /usr/local/bin/earthly'
+
+      - run:
+          name: Build all HPT artifacts
+          command: earthly +all --distro=<< parameters.distro >>
+
+      - store_artifacts:
+          path: artifacts
+          destination: /artifacts
+
+      - run:
+          name: Post to XV Artifacts Store
+          command: |
+            export VERSION="$(grep PACKAGE_VERSION dkms.conf|cut -f 2 -d=)"
+            export -p CIRCLE_ARTIFACTS=artifacts
+            python3 .circleci/post_xv_artifacts.py
+  all-builds-completed:
+    machine:
+      image: ubuntu-2204:current
+    steps:
+      - run: echo "All builds completed successfully"
+
+default-filters: &default-filters
+  tags:
+    only: /^v.*/
+
+workflows:
+  Build-HPT:
+    jobs:
+      - build:
+          context: XAPIKEY
+          matrix:
+            parameters:
+              distro: ["bookworm"]
+          filters: *default-filters
+      - all-builds-completed:
+          requires:
+            - build

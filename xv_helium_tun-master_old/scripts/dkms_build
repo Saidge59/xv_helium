@@ -1,0 +1,6 @@
+sudo rm -rf build
+meson setup build -Dincludedir="include/hpt" -Dbuild_libs=false -Dkernel_dir=/lib/modules/$1
+cd build
+ninja clean
+ninja
+ninja install

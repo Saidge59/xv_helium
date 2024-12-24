@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 199309L // Enable CLOCK_MONOTONIC and other POSIX features
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,7 +9,7 @@
 #include <linux/version.h>
 #include <linux/mman.h>
 #include <sys/mman.h>
-
+#include <time.h>
 #include "hpt.h"
 
 struct hpt {
@@ -45,9 +47,8 @@ struct hpt {
 
 static volatile int hpt_fd = -1;
 
-int hpt_wake_fd()
-{
-	return hpt_fd;
+static inline double get_time_diff(struct timespec start, struct timespec end) {
+    return (end.tv_sec - start.tv_sec) * 1e9 + (end.tv_nsec - start.tv_nsec);
 }
 
 int hpt_init()
@@ -63,14 +64,14 @@ int hpt_init()
 	return 0;
 }
 
-struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t buffer_items_count,
+struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t ring_buffer_items,
 		      hpt_do_pkt read_cb, void *handle, size_t idle_usec)
 {
-	//int ret;
-	//struct hpt_network_device_info dev_info;
+	int ret;
+	struct hpt_device_info dev_info;
 	struct hpt *hpt = NULL;
 
-	if (!name || !buffer_items_count) {
+	if (!name || !ring_buffer_items) {
 		return NULL;
 	}
 
@@ -82,14 +83,14 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t buffer_items_count,
 
 	printf("HPT: Mapping in the memory\n");
 
-	if (buffer_items_count > HPT_MAX_ITEMS) {
+	if (ring_buffer_items > HPT_MAX_ITEMS) {
 		printf("HPT: hpt rings only support up to %u ring buffer items\n",
 		       HPT_MAX_ITEMS);
 		return NULL;
 	}
 
 	size_t mem_size = (2 * sizeof(struct hpt_ring_buffer)) +
-			  (2 * hpt_rb_ring_buffer_stride(buffer_items_count)) + sizeof(uint8_t);
+			  (2 * hpt_rb_ring_buffer_stride(ring_buffer_items)) + sizeof(uint8_t);
 
 	/** The kernel allocates the rings and we mmap the allocated memory into userspace **/
 	uint8_t *ring_memory = mmap(NULL, mem_size, PROT_READ | PROT_WRITE,
@@ -104,8 +105,8 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t buffer_items_count,
 
 	printf("HPT: Mapped memory into userspace at %p\n", ring_memory);
 
-	/*memset(&dev_info, 0, sizeof(dev_info));
-	dev_info.buffer_items_count = buffer_items_count;
+	memset(&dev_info, 0, sizeof(dev_info));
+	dev_info.ring_buffer_items = ring_buffer_items;
 	dev_info.mem_start = ring_memory;
 	dev_info.mem_size = mem_size;
 	dev_info.idle_usec = idle_usec;
@@ -117,7 +118,7 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t buffer_items_count,
 
 	if (ret < 0) {
 		goto error;
-	}*/
+	}
 
 	hpt = malloc(sizeof(struct hpt));
 
@@ -127,9 +128,11 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t buffer_items_count,
 
 	hpt->tx_ring = (struct hpt_ring_buffer *)ring_memory;
 	hpt->rx_ring = hpt->tx_ring + 1;
-	//hpt->tx_start = hpt_rb_tx_start(hpt->tx_ring, dev_info.ring_buffer_items);
-	//hpt->rx_start = hpt_rb_rx_start(hpt->tx_ring, dev_info.ring_buffer_items);
-	hpt->rb_size = buffer_items_count;
+	hpt->tx_start =
+		hpt_rb_tx_start(hpt->tx_ring, dev_info.ring_buffer_items);
+	hpt->rx_start =
+		hpt_rb_rx_start(hpt->tx_ring, dev_info.ring_buffer_items);
+	hpt->rb_size = ring_buffer_items;
 
 	hpt->read_cb = read_cb;
 	hpt->read_hdl = handle;
@@ -192,8 +195,24 @@ void hpt_drain(struct hpt *state)
 
 void hpt_write(struct hpt *state, uint8_t *ip_pkt, size_t len)
 {
+	printf("hpt_write\n");
 	hpt_rb_tx(state->rx_ring, state->rb_size, state->rx_start, ip_pkt, len);
-	if (ACQUIRE(state->kthread_needs_wake)) {
+			
+	struct timespec start, end;
+
+	clock_gettime(CLOCK_MONOTONIC, &start); // Start timing
+	uint32_t i = 83333;
+	while(i > 0)
+	{
 		ioctl(hpt_fd, HPT_IOCTL_NOTIFY, NULL);
+		i--;
 	}
+	//ioctl(hpt_fd, HPT_IOCTL_NOTIFY, NULL);
+	clock_gettime(CLOCK_MONOTONIC, &end);   // End timing
+
+    printf("Time taken to write to buffer: %.2f ns\n", get_time_diff(start, end));
+
+	/*if (ACQUIRE(state->kthread_needs_wake)) {
+		ioctl(hpt_fd, HPT_IOCTL_NOTIFY, NULL);
+	}*/
 }

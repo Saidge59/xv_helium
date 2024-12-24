@@ -4,6 +4,15 @@
 #include <linux/page-flags.h>
 #include <linux/gfp.h>
 
+
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/init.h>
+#include <linux/fs.h>
+#include <linux/dma-mapping.h>
+#include <linux/mutex.h>
+#include <linux/platform_device.h>  // Add this
+
 MODULE_VERSION(HPT_VERSION);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Blake Loring");
@@ -11,158 +20,12 @@ MODULE_DESCRIPTION("High Performance TUN device");
 
 struct hpt_mod_info hmi;
 
-static struct device core_dev;
-#define DMA_ALIGNMENT 4096 // Assume 4KB alignment for DMA requirements
+//static struct device core_dev;
+extern struct hpt_dev *hpt_device;
+void copy_hpt_dev(struct hpt_dev *to, const struct hpt_dev *from);
+//static void hpt_free_buffers(struct hpt_dev *hpt);
 
-static void hpt_free_buffers(struct hpt_dev *hpt);
-
-static int hpt_kernel_thread(void *param)
-{
-	pr_info("Kernel RX thread started!\n");
-	struct hpt_dev *dev = param;
-	//size_t timeout = jiffies + dev->kthread_idle_jiffies;
-	//const long schedule_timout = usecs_to_jiffies(HPT_KTHREAD_RESCHEDULE_INTERVAL);
-
-	while (!kthread_should_stop()) {
-		wait_event_interruptible(dev->read_wait_queue, dev->event_flag);
-		spin_lock(&dev->buffer_lock);
-		dev->event_flag = 0;
-		spin_unlock(&dev->buffer_lock);
-		// Process received packets
-		hpt_net_rx(dev);
-		// Additional tasks, e.g., transmitting processed packets
-	}
-
-	/*
-	while (true) {
-		// Wait for some idle time before commiting to sleeping
-		if (time_after_eq(jiffies, timeout)) {
-			STORE(dev->kthread_needs_wake, 1);
-			// Go to sleep if there aren't any packets
-			wait_event_interruptible(
-				dev->read_wait_queue,
-				hpt_rb_count(dev->rx_ring,
-					     dev->ring_buffer_items) ||
-					kthread_should_stop());
-			STORE(dev->kthread_needs_wake, 0);
-		} else {
-			
-			 // This short sleep will release the cpu to allow for other tasks to be run on it
-			 // this is important or ksoftirqd will never process the packet backlogs
-			schedule_timeout_interruptible(schedule_timout);
-		}
-
-		// If we got killed, abort the loop
-		if (kthread_should_stop()) {
-			pr_info("Kernel RX thread killed exiting RX loop\n");
-			break;
-		}
-
-		// Consume any packet and if data was consumed, reset our idle timer
-		if (hpt_net_rx(dev) > 0) {
-			timeout = jiffies + dev->kthread_idle_jiffies;
-		}
-	}
-*/
-	pr_info("Kernel RX thread stopped!\n");
-	return 0;
-}
-
-static inline bool hpt_capable(void)
-{
-	return capable(CAP_NET_ADMIN);
-}
-
-static int hpt_open(struct inode *inode, struct file *file)
-{
-	int ret;
-
-	pr_info("Security check\n");
-
-	ret = security_tun_dev_create();
-
-	if (ret < 0) {
-		return ret;
-	}
-
-	if (!hpt_capable()) {
-		return -EINVAL;
-	}
-
-	file->private_data = NULL;
-	pr_info("/dev/hpt opened\n");
-	return 0;
-}
-
-static int hpt_release(struct inode *inode, struct file *file)
-{
-	int retval = -EINVAL;
-	struct hpt_dev *hpt = NULL;
-
-	rtnl_lock();
-
-	hpt = file->private_data;
-
-	if (!hpt) {
-		pr_err("cannot free unallocated device");
-		retval = -EINVAL;
-		goto exit;
-	}
-
-	hpt_free_buffers(hpt);
-
-	pr_info("Beginning HPT release\n");
-
-	if (hpt->hd_dbgfs_tun_dir)
-		debugfs_remove_recursive(hpt->hd_dbgfs_tun_dir);
-
-	/* Stop kernel thread for multiple mode */
-	if (hpt->pthread != NULL) {
-		kthread_stop(hpt->pthread);
-		hpt->pthread = NULL;
-	}
-
-	pr_info("Stopped pthread\n");
-
-	/* We cannot free the net-dev yet but it should be unregistered
-	 * otherwise tx could race the unmap causing memory misuse
-	 */
-	unregister_netdevice(hpt->net_dev);
-
-
-	// TODO: Figure this out put_net(net);
-	pr_info("/dev/hpt closed\n");
-
-	retval = 0;
-
-exit:
-
-	rtnl_unlock();
-	return 0;
-}
-
-static int hpt_run_thread(struct hpt_dev *hpt)
-{
-	pr_info("beginning kernel thread\n");
-
-	/**
-	 * Create a new kernel thread to drain userspace packets and send them to the kernel 
-	 */
-	hpt->pthread =
-		kthread_create(hpt_kernel_thread, (void *)hpt, "%s", hpt->name);
-
-	if (IS_ERR(hpt->pthread)) {
-		return -ECANCELED;
-	}
-
-	pr_info("Kernel RX thread created\n");
-
-	wake_up_process(hpt->pthread);
-
-	return 0;
-}
-
-static unsigned int hpt_poll(struct file *file,
+/*static unsigned int hpt_poll(struct file *file,
 			     struct poll_table_struct *poll_table)
 {
 	struct hpt_dev *dev = file->private_data;
@@ -172,7 +35,7 @@ static unsigned int hpt_poll(struct file *file,
 	if (dev) {
 		poll_wait(file, &dev->tx_busy, poll_table);
 		if (hpt_rb_count(dev->tx_ring, dev->ring_buffer_items)) {
-			mask |= POLLIN | POLLRDNORM; /* readable */
+			mask |= POLLIN | POLLRDNORM;
 		}
 	}
 
@@ -192,29 +55,6 @@ static int hpt_allocate_buffers(struct hpt_dev *hpt)
 			return -ENOMEM;
 		}
 		atomic_set(&hpt->buffers[i].in_use, 0);
-
-	/*
-        // Allocate data_in buffer
-        hpt->buffers[i].data_in = kmalloc(HPT_BUFFER_SIZE + DMA_ALIGNMENT - 1, GFP_KERNEL);
-        if (!hpt->buffers[i].data_in) {
-            pr_err("Failed to allocate data_in buffer %d\n", i);
-            return -ENOMEM;
-        }
-        hpt->buffers[i].aligned_data_in = PTR_ALIGN(hpt->buffers[i].data_in, DMA_ALIGNMENT);
-
-        // Allocate data_out buffer
-        hpt->buffers[i].data_out = kmalloc(HPT_BUFFER_SIZE + DMA_ALIGNMENT - 1, GFP_KERNEL);
-        if (!hpt->buffers[i].data_out) {
-            pr_err("Failed to allocate data_out buffer %d\n", i);
-            kfree(hpt->buffers[i].data_in);
-            return -ENOMEM;
-        }
-        hpt->buffers[i].aligned_data_out = PTR_ALIGN(hpt->buffers[i].data_out, DMA_ALIGNMENT);
-
-        atomic_set(&hpt->buffers[i].in_use, 0);
-        pr_info("Allocated buffers %d: data_in=%p, data_out=%p\n", i,
-                hpt->buffers[i].aligned_data_in, hpt->buffers[i].aligned_data_out);
-				*/
     }
 
     hpt->buffers_allocated = 1;
@@ -233,21 +73,6 @@ static void hpt_free_buffers(struct hpt_dev *hpt)
 			vfree(hpt->buffers[i].data_combined);
 			atomic_set(&hpt->buffers[i].in_use, 0);
    		}
-		/*
-		if (hpt->buffers[i].data_in) {
-			dma_free_coherent(hpt->net_dev->dev.parent,
-					  HPT_BUFFER_SIZE,
-					  hpt->buffers[i].data_in,
-					  hpt->buffers[i].dma_in_addr);
-			hpt->buffers[i].data_in = NULL;
-		}
-		if (hpt->buffers[i].data_out) {
-			dma_free_coherent(hpt->net_dev->dev.parent,
-					  HPT_BUFFER_SIZE,
-					  hpt->buffers[i].data_out,
-					  hpt->buffers[i].dma_out_addr);
-			hpt->buffers[i].data_out = NULL;
-		}*/
 	}
 	hpt->buffers_allocated = 0;
 	spin_unlock(&hpt->buffer_lock);
@@ -294,116 +119,6 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma) {
     return 0;
 }
 
-
-/*
-static int hpt_mmap(struct file *file, struct vm_area_struct *vma) {
-    struct hpt_dev *hpt = file->private_data;
-    unsigned long pfn_encrypted, pfn_decrypted;
-    int buffer_idx;
-
-    buffer_idx = vma->vm_pgoff;
-    if (buffer_idx >= HPT_BUFFER_COUNT) {
-        pr_err("Invalid buffer index: %d\n", buffer_idx);
-        return -EINVAL;
-    }
-
-    // Validate the buffers
-    if (!hpt->buffers[buffer_idx].data_in || !hpt->buffers[buffer_idx].data_out) {
-        pr_err("Buffers not allocated for index %d\n", buffer_idx);
-        return -EINVAL;
-    }
-
-    // Check if the buffer is already in use
-    if (atomic_read(&hpt->buffers[buffer_idx].in_use)) {
-        pr_err("Buffer %d is already in use\n", buffer_idx);
-        return -EBUSY;
-    }
-
-    // Calculate PFNs
-    pfn_encrypted = virt_to_phys(hpt->buffers[buffer_idx].data_in) >> PAGE_SHIFT;
-    pfn_decrypted = virt_to_phys(hpt->buffers[buffer_idx].data_out) >> PAGE_SHIFT;
-
-    // Map the encrypted buffer
-    if (remap_pfn_range(vma, vma->vm_start, pfn_encrypted, HPT_BUFFER_SIZE, vma->vm_page_prot)) {
-        pr_err("Failed to map encrypted buffer: idx=%d pfn=%lx\n", buffer_idx, pfn_encrypted);
-        return -EFAULT;
-    }
-
-    // Map the decrypted buffer
-    
-	if (remap_pfn_range(vma, vma->vm_start + HPT_BUFFER_SIZE, pfn_decrypted, HPT_BUFFER_SIZE, vma->vm_page_prot)) {
-        pr_err("Failed to map decrypted buffer: idx=%d pfn=%lx\n", buffer_idx, pfn_decrypted);
-        return -EFAULT;
-    }
-
-    // Mark the buffer as in use
-    atomic_set(&hpt->buffers[buffer_idx].in_use, 1);
-
-    pr_info("Mapped encrypted and decrypted buffers for index %d\n", buffer_idx);
-    return 0;
-}*/
-
-
-/*
-static int hpt_mmap(struct file *file, struct vm_area_struct *vma) {
-	struct hpt_dev *hpt = file->private_data;
-    unsigned long pfn_encrypted, pfn_decrypted;
-    int buffer_idx;
-
-    // Determine the buffer index
-    buffer_idx = vma->vm_pgoff;
-    if (buffer_idx >= HPT_BUFFER_COUNT)
-        return -EINVAL;
-
-	if (atomic_read(&hpt->buffers[buffer_idx].in_use))
-		return -EBUSY;
-
-    // Get the physical frame numbers for encrypted and decrypted buffers
-    pfn_encrypted = virt_to_phys(hpt->buffers[buffer_idx].data_in) >> PAGE_SHIFT;
-    pfn_decrypted = virt_to_phys(hpt->buffers[buffer_idx].data_out) >> PAGE_SHIFT;
-
-    // Map both buffers to consecutive regions in user space
-    if (remap_pfn_range(vma, vma->vm_start, pfn_encrypted, HPT_BUFFER_SIZE, vma->vm_page_prot))
-        return -EFAULT;
-
-    if (remap_pfn_range(vma, vma->vm_start + HPT_BUFFER_SIZE, pfn_decrypted, HPT_BUFFER_SIZE, vma->vm_page_prot))
-        return -EFAULT;
-
-	 // Mark the decrypted buffer as in use
-	atomic_set(&hpt->buffers[buffer_idx].in_use, 1);
-
-    return 0;
-}
-*/
-/*
-static struct hpt_dma_buffer *get_free_buffer(struct hpt_dev *hpt)
-{
-	int i;
-	struct hpt_dma_buffer *buffer = NULL;
-	spin_lock(&hpt->buffer_lock);
-	for (i = 0; i < HPT_BUFFER_COUNT; i++) {
-		if (atomic_cmpxchg(&hpt->buffers[i].in_use, 0, 1) == 0) {
-			buffer = &hpt->buffers[i];
-			break;
-		}
-	}
-	spin_unlock(&hpt->buffer_lock);
-	return buffer;
-}
-
-static void release_buffer(struct hpt_dev *hpt, dma_addr_t dma_in_addr)
-{
-	int i;
-	spin_lock(&hpt->buffer_lock);
-	for (i = 0; i < HPT_BUFFER_COUNT; i++) {
-		if (hpt->buffers[i].dma_in_addr == dma_in_addr) {
-			atomic_set(&hpt->buffers[i].in_use, 0);
-			break;
-		}
-	}
-	spin_unlock(&hpt->buffer_lock);
-}
-*/
 //=====================================================================
 
 static int hpt_dbgfs_tun_create(struct hpt_dev *hpt, const char *name)
@@ -450,166 +165,215 @@ static int hpt_dbgfs_tun_create(struct hpt_dev *hpt, const char *name)
 	hpt->hd_dbgfs_tun_dir = tun_dir;
 
 	return 0;
-}
-/*
-static int hpt_ioctl_create(struct file *file, struct net *net,
-                            uint32_t ioctl_num, unsigned long ioctl_param)
+}*/
+
+static int hpt_kernel_thread(void *param)
 {
-    struct hpt_dev *hpt;
-    int ret = 0;
+	pr_info("Kernel RX thread started!\n");
+	struct hpt_dev *dev = param;
+	//size_t timeout = jiffies + dev->kthread_idle_jiffies;
+	//const long schedule_timout = usecs_to_jiffies(HPT_KTHREAD_RESCHEDULE_INTERVAL);
 
-    pr_info("Creating HPT device...\n");
+	while (!kthread_should_stop()) {
+		wait_event_interruptible(dev->read_wait_queue, dev->event_flag);
+		spin_lock(&dev->buffer_lock);
+		dev->event_flag = 0;
+		spin_unlock(&dev->buffer_lock);
+		// Process received packets
+		hpt_net_rx(dev);
+		// Additional tasks, e.g., transmitting processed packets
+	}
 
-    if (file->private_data) {
-        pr_err("Device already created\n");
-        return -EINVAL;
-    }
+	pr_info("Kernel RX thread stopped!\n");
+	return 0;
+}
 
-    hpt = kzalloc(sizeof(struct hpt_dev), GFP_KERNEL);
-    if (!hpt) {
-        pr_err("Failed to allocate hpt_dev structure\n");
-        return -ENOMEM;
-    }
+static inline bool hpt_capable(void)
+{
+	return capable(CAP_NET_ADMIN);
+}
 
-    hpt->buffers_allocated = 0;
-    spin_lock_init(&hpt->buffer_lock);
-    init_waitqueue_head(&hpt->read_wait_queue);
+static int hpt_run_thread(struct hpt_dev *hpt)
+{
+	pr_info("beginning kernel thread\n");
 
-    // Allocate DMA buffers
-    ret = hpt_allocate_buffers(hpt, &core_dev);
-    if (ret) {
-        pr_err("Failed to allocate buffers\n");
-        kfree(hpt);
-        return ret;
-    }
+	/**
+	 * Create a new kernel thread to drain userspace packets and send them to the kernel 
+	 */
+	hpt->pthread =
+		kthread_create(hpt_kernel_thread, (void *)hpt, "%s", hpt->name);
 
-    file->private_data = hpt;
-    hpt->buffers_allocated = 1;
+	if (IS_ERR(hpt->pthread)) {
+		return -ECANCELED;
+	}
 
-    pr_info("HPT device created successfully\n");
+	pr_info("Kernel RX thread created\n");
+
+	wake_up_process(hpt->pthread);
+
+	return 0;
+}
+
+static int hpt_open(struct inode *inode, struct file *file)
+{
+	pr_info("HPT open!\n");
+
+    //struct hpt_dev *dev = container_of(inode->i_cdev, struct hpt_dev, cdev);
+    //file->private_data = dev;
+	file->private_data = hpt_device;
+
+	int ret;
+	
+	ret = security_tun_dev_create();
+	if (ret < 0) {
+		pr_info("Cannot create tun_dev\n");
+		return ret;
+	}
+
+	if (!hpt_capable()) {
+		return -EINVAL;
+	}
+	
+	pr_info("/dev/hpt opened\n");
     return 0;
 }
-*/
+
+static int hpt_release(struct inode *inode, struct file *file)
+{
+	pr_info("HPT close!\n");
+
+    struct hpt_dev *dev = NULL;
+
+	rtnl_lock();
+
+	dev = file->private_data;
+
+	if (!dev) {
+		pr_err("Cannot free unallocated device");
+	}
+
+	//hpt_free_buffers(dev);
+
+	/*if (hpt->hd_dbgfs_tun_dir)
+		debugfs_remove_recursive(hpt->hd_dbgfs_tun_dir);*/
+
+	if (dev->pthread != NULL) {
+		kthread_stop(dev->pthread);
+		dev->pthread = NULL;
+	}
+
+	pr_info("Stopped pthread\n");
+
+	if(dev->net_dev != NULL)
+	{
+		pr_info("unregister_netdevice\n");
+		unregister_netdevice(dev->net_dev);
+	}
+
+	pr_info("/dev/hpt closed\n");
+
+	rtnl_unlock();
+	return 0;
+}
+
+static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
+{
+    struct hpt_dev *dev = file->private_data;
+    unsigned long size = vma->vm_end - vma->vm_start;
+    unsigned long pfn = dev->dma_handle >> PAGE_SHIFT;
+
+    // Ensure the requested size does not exceed the buffer size
+    if (size > HPT_ALLOC_SIZE * 2)
+        return -EINVAL;
+
+    // Remap the DMA buffer to user space
+    if (remap_pfn_range(vma, vma->vm_start, pfn, size, vma->vm_page_prot))
+        return -EAGAIN;
+
+    return 0;
+}
+
+void copy_hpt_dev(struct hpt_dev *to, const struct hpt_dev *from) {
+    strncpy(to->name, from->name, HPT_NAMESIZE);
+    to->class = from->class;
+    to->device = from->device;
+    to->cdev = from->cdev; 
+    to->devt = from->devt;
+    to->pdev = from->pdev;
+}
 
 static int hpt_ioctl_create(struct file *file, struct net *net,
 			    uint32_t ioctl_num, unsigned long ioctl_param)
 {
 	struct net_device *net_dev = NULL;
-	struct hpt_network_device_info dev_info;
 	struct hpt_dev *hpt;
 	int ret;
 
 	pr_info("Creating hpt...\n");
 
-	if (file->private_data) {
-		return -EINVAL;
-	}
-
-	if (_IOC_SIZE(ioctl_num) != sizeof(dev_info)) {
-		return -EINVAL;
-	}
-
-	if (copy_from_user(&dev_info, (void *)ioctl_param, sizeof(dev_info))) {
-		return -EFAULT;
-	}
-
-	if (strnlen(dev_info.name, sizeof(dev_info.name)) ==
-	    sizeof(dev_info.name)) {
-		pr_err("hpt.name not zero-terminated");
-		return -EINVAL;
-	}
-
-	pr_info("Checks complete. Happy to create a device\n");
-
-	net_dev = alloc_netdev(sizeof(struct hpt_dev), dev_info.name,
+	net_dev = alloc_netdev(sizeof(struct hpt_dev), HPT_DEVICE,
 #ifdef NET_NAME_USER
 			       NET_NAME_USER,
 #endif
 			       hpt_net_init);
 	if (net_dev == NULL) {
-		pr_err("error allocating device \"%s\"\n", dev_info.name);
+		pr_err("error allocating device \"%s\"\n", HPT_DEVICE);
 		return -EBUSY;
 	}
 
 	dev_net_set(net_dev, net);
 
-	hpt = netdev_priv(net_dev);
+	//hpt = netdev_priv(net_dev);
+	//memcpy(hpt, file->private_data, sizeof(struct hpt_dev));
+	hpt = file->private_data;
+	//copy_hpt_dev(hpt, file->private_data);
+
 
 	init_waitqueue_head(&hpt->tx_busy);
 
 	hpt->net_dev = net_dev;
-	//hpt->ring_buffer_items = dev_info.ring_buffer_items;
+	pr_info("Set net_dev\n");
 
-	// Bound the number of ring buffer elements so that 2x the number of items can't lead to address overflow
+	//hpt->ring_buffer_items = dev_info.ring_buffer_items;
+/*
 	if (hpt->ring_buffer_items > HPT_MAX_ITEMS) {
 		pr_err("cannot allocate such a large HPT");
 		ret = -EINVAL;
 		goto clean_up;
 	}
 
-	// Now we have how many items we need stored map the memory for the ring and wake flag 
 	hpt->num_ring_memory =
 		(sizeof(struct hpt_ring_buffer) * 2) +
 		(hpt->ring_buffer_items * 2 * HPT_RB_ELEMENT_SIZE) +
 		sizeof(uint8_t);
 
-	
-   //We derive the memory we need from the provided ring buffer size but we make sure that the mem_size provided by userspace should fit it
-   //This doesn't improve security, but adds a second level of protection for userspace shooting itself in the foot by corrupting runtime memory.
-   /*if (dev_info.mem_size < hpt->num_ring_memory) {
-		pr_err("the userspace memory provided does not have enough space to fit this ring and wake flag");
-		ret = -EINVAL;
-		goto clean_up;
-	}*/
-
-	//pr_info("HPT memory: %zu %zu", hpt->ring_buffer_items, hpt->num_ring_memory);
-/*
-	if (hpt_map_in_pages(hpt, &dev_info) != 0) {
-		pr_err("could not map in userspace pages");
-		ret = -EINVAL;
-		goto clean_up;
-	}
-*/
-
-/*
-	hpt->tx_ring = (struct hpt_ring_buffer *)hpt->ring_memory;
-	hpt->rx_ring = hpt->tx_ring + 1;
-	hpt->tx_start = hpt_rb_tx_start(hpt->tx_ring, hpt->ring_buffer_items);
-	hpt->rx_start = hpt_rb_rx_start(hpt->tx_ring, hpt->ring_buffer_items);
-	hpt->kthread_needs_wake =
-		hpt->ring_memory + hpt->num_ring_memory - sizeof(uint8_t);
-	hpt->kthread_idle_jiffies = usecs_to_jiffies(dev_info.idle_usec);
-*/	
-
 	pr_info("set up pointers");
+*/
+	strncpy(hpt->name, HPT_DEVICE, HPT_NAMESIZE);
 
-	strncpy(hpt->name, dev_info.name, HPT_NAMESIZE);
+	pr_info("Copied in name\n");
 
-	pr_info("copied in name");
-
-	// Kernel 5.16 and above call dev_addr_check to check MAC address
-	// Since this is a virtual interface, set MAC address to all zeros
-	pr_info("set MAC address to all zeros for virtual interfaces");
+	pr_info("Set MAC address for virtual interfaces\n");
 	unsigned char virtual_mac_addr[6] = {
 		0x02, 0x00, 0x00, 0x00, 0x00, 0x01
 	};
 	eth_hw_addr_set(net_dev, virtual_mac_addr);
 
-	ret = hpt_dbgfs_tun_create(hpt, hpt->name);
+	/*ret = hpt_dbgfs_tun_create(hpt, hpt->name);
 	if (ret)
 		goto clean_up;
+*/
 
 	ret = register_netdevice(net_dev);
 	if (ret) {
-		pr_err("error %i registering device \"%s\"\n", ret,
-		       dev_info.name);
+		pr_err("error %i registering device \"%s\"\n", ret, HPT_DEVICE);
 		goto clean_up;
 	}
 
 	//Initialise the reader thread 
 	init_waitqueue_head(&hpt->read_wait_queue);
 
-	 //Launch the RX and epoll handling kthread 
+	//Launch the RX and epoll handling kthread 
 	ret = hpt_run_thread(hpt);
 
 	if (ret != 0) {
@@ -618,13 +382,21 @@ static int hpt_ioctl_create(struct file *file, struct net *net,
 		goto clean_up;
 	}
 
-	ret = hpt_allocate_buffers(hpt);
-	if (ret)
-		goto clean_up;
-
-	file->private_data = hpt;
-
 	net_dev->needs_free_netdev = true;
+
+	// Allocate DMA buffer using platform device
+    hpt->buffer_base = dma_alloc_coherent(&hpt->pdev->dev,
+                                                 HPT_ALLOC_SIZE * 2,
+                                                 &hpt->dma_handle,
+                                                 GFP_KERNEL);
+    
+    if (!hpt->buffer_base) {
+        pr_err("Failed to allocate DMA buffer\n");
+        ret = -ENOMEM;
+        goto clean_up;
+    }
+	hpt->ring_tx = (struct ring_buffer *)hpt->buffer_base;
+	hpt->ring_rx = (struct ring_buffer *)hpt->buffer_base + (HPT_ALLOC_SIZE / sizeof(struct ring_buffer));
 
 	pr_info("HPT: Complete");
 
@@ -637,18 +409,6 @@ clean_up:
 	return ret;
 }
 
-/*
-static int hpt_ioctl_notify(struct file *file, struct net *net,
-			    uint32_t ioctl_num, unsigned long ioctl_param)
-{
-	struct hpt_dev *hpt = file->private_data;
-
-	// Wake up the thread waiting for data
-	wake_up_all(&hpt->read_wait_queue);
-
-	return 0;
-}
-*/
 static long hpt_ioctl(struct file *file, uint32_t ioctl_num,
 		      unsigned long ioctl_param)
 {
@@ -656,11 +416,8 @@ static long hpt_ioctl(struct file *file, uint32_t ioctl_num,
 	struct net *net = NULL;
 	struct hpt_dev *hpt = file->private_data;
 
-	pr_debug("IOCTL num=0x%0x param=0x%0lx\n", ioctl_num, ioctl_param);
+	//pr_info("IOCTL num=0x%0x param=0x%0lx\n", ioctl_num, ioctl_param);
 
-	/*
-	 * Switch according to the ioctl called
-	 */
 	switch (_IOC_NR(ioctl_num)) {
 	case _IOC_NR(HPT_IOCTL_CREATE):
 		rtnl_lock();
@@ -677,80 +434,120 @@ static long hpt_ioctl(struct file *file, uint32_t ioctl_num,
 		ret = 0;
 		//ret = hpt_ioctl_notify(file, net, ioctl_num, ioctl_param);
 		break;
-	case _IOC_NR(HPT_IOCTL_DESTROY):
-		if (hpt->buffers_allocated) {
-			hpt_free_buffers(hpt);
-			return 0;
-		}
-		return -EINVAL;
 	default:
-		pr_debug("IOCTL default\n");
+		pr_info("IOCTL default\n");
 		break;
 	}
 
 	return ret;
 }
 
-/* Don't support legacy ioctl */
-static long hpt_compat_ioctl(struct file *inode, uint32_t ioctl_num,
-			     unsigned long ioctl_param)
-{
-	pr_debug("Not implemented.\n");
-	return -EINVAL;
-}
-
-static const struct file_operations hpt_fops = {
-	.owner = THIS_MODULE,
-	.open = hpt_open,
-	.release = hpt_release,
-	.poll = hpt_poll,
-	.mmap = hpt_mmap,
+static struct file_operations hpt_fops = {
+    .owner = THIS_MODULE,
+    .open = hpt_open,
+    .release = hpt_release,
+    .mmap = hpt_mmap,
 	.unlocked_ioctl = hpt_ioctl,
-	.compat_ioctl = hpt_compat_ioctl,
 };
-
-static struct miscdevice hpt_misc = {
-	.minor = MISC_DYNAMIC_MINOR,
-	.name = HPT_DEVICE,
-	.fops = &hpt_fops,
-};
-
 
 static int __init hpt_init(void)
 {
-	struct dentry *root;
-	int rc;
+    int ret;
 
-	// Initialize the dummy device
-    dev_set_name(&core_dev, "hpt_core_device");
-    device_initialize(&core_dev);
+    pr_info("Initializing module\n");
 
-	root = debugfs_create_dir(HPT_DEVICE, NULL);
-	if (IS_ERR(root)) {
-		pr_err("Cannot create debugfs root dir: %ld\n", PTR_ERR(root));
-		return PTR_ERR(root);
-	}
+    hpt_device = kzalloc(sizeof(struct hpt_dev), GFP_KERNEL);
+    if (!hpt_device)
+        return -ENOMEM;
 
-	rc = misc_register(&hpt_misc);
+    // Allocate character device numbers
+    ret = alloc_chrdev_region(&hpt_device->devt, 0, 1, HPT_DEVICE);
+    if (ret) {
+        pr_err("Failed to allocate chrdev region\n");
+        goto err_free_dev;
+    }
 
-	if (rc != 0) {
-		pr_err("Misc registration failed\n");
-		debugfs_remove_recursive(root);
-		return rc;
-	}
-	hmi.hmi_dbgfs_root = root;
+    // Initialize character device
+    cdev_init(&hpt_device->cdev, &hpt_fops);
+    hpt_device->cdev.owner = THIS_MODULE;
+    ret = cdev_add(&hpt_device->cdev, hpt_device->devt, 1);
+    if (ret) {
+        pr_err("Failed to add cdev\n");
+        goto err_unreg_chrdev;
+    }
 
-	return 0;
+    // Create device class
+    hpt_device->class = class_create(HPT_DEVICE);
+    if (IS_ERR(hpt_device->class)) {
+        pr_err("Failed to create class\n");
+        ret = PTR_ERR(hpt_device->class);
+        goto err_del_cdev;
+    }
+
+    // Create parent platform device first
+    struct platform_device *pdev;
+    pdev = platform_device_register_simple(HPT_DEVICE, -1, NULL, 0);
+    if (IS_ERR(pdev)) {
+        pr_err("Failed to register platform device\n");
+        ret = PTR_ERR(pdev);
+        goto err_del_cdev;
+    }
+
+    // Create device with platform device as parent
+    hpt_device->device = device_create(hpt_device->class, &pdev->dev,
+                                      hpt_device->devt, NULL, HPT_DEVICE);
+    if (IS_ERR(hpt_device->device)) {
+        pr_err("Failed to create device\n");
+        ret = PTR_ERR(hpt_device->device);
+        goto err_destroy_class;
+    }
+
+    // Set DMA mask with parent device
+    ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
+    if (ret) {
+        pr_err("Failed to set DMA mask\n");
+        goto err_destroy_device;
+    }
+
+    // Store platform device
+    hpt_device->pdev = pdev;
+
+    pr_info("DMA buffer allocated successfully\n");
+    //mutex_init(&hpt_device->lock);
+
+	pr_info("Init HPT!\n");
+    return 0;
+
+err_destroy_device:
+    platform_device_unregister(hpt_device->pdev);
+    device_destroy(hpt_device->class, hpt_device->devt);
+err_destroy_class:
+    platform_device_unregister(hpt_device->pdev);
+    class_destroy(hpt_device->class);
+err_del_cdev:
+    cdev_del(&hpt_device->cdev);
+err_unreg_chrdev:
+    unregister_chrdev_region(hpt_device->devt, 1);
+err_free_dev:
+    kfree(hpt_device);
+    pr_err("Module initialization failed\n");
+    return ret;
 }
 
 static void __exit hpt_exit(void)
 {
-	if (hmi.hmi_dbgfs_root)
-		debugfs_remove_recursive(hmi.hmi_dbgfs_root);
-	misc_deregister(&hpt_misc);
-
-	put_device(&core_dev); // Release core device
-    pr_info("HPT driver exited\n");
+	if(hpt_device->buffer_base)
+	{
+		dma_free_coherent(hpt_device->device, HPT_ALLOC_SIZE * 2,
+                      hpt_device->buffer_base, hpt_device->dma_handle);
+	}
+    platform_device_unregister(hpt_device->pdev);
+    device_destroy(hpt_device->class, hpt_device->devt);
+    class_destroy(hpt_device->class);
+    cdev_del(&hpt_device->cdev);
+    unregister_chrdev_region(hpt_device->devt, 1);
+    kfree(hpt_device);
+	pr_info("Exit HPT!\n");
 }
 
 module_init(hpt_init);
