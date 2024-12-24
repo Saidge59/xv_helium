@@ -22,166 +22,18 @@ struct hpt_mod_info hmi;
 
 //static struct device core_dev;
 extern struct hpt_dev *hpt_device;
-void copy_hpt_dev(struct hpt_dev *to, const struct hpt_dev *from);
-//static void hpt_free_buffers(struct hpt_dev *hpt);
-
-/*static unsigned int hpt_poll(struct file *file,
-			     struct poll_table_struct *poll_table)
-{
-	struct hpt_dev *dev = file->private_data;
-
-	unsigned int mask = 0;
-
-	if (dev) {
-		poll_wait(file, &dev->tx_busy, poll_table);
-		if (hpt_rb_count(dev->tx_ring, dev->ring_buffer_items)) {
-			mask |= POLLIN | POLLRDNORM;
-		}
-	}
-
-	return mask;
-}
-
-//=====================================================================
-static int hpt_allocate_buffers(struct hpt_dev *hpt)
-{
-    int i;
-
-    for (i = 0; i < HPT_BUFFER_COUNT; i++) {
-
-		hpt->buffers[i].data_combined = vmalloc_user(HPT_BUFFER_SIZE);//kmalloc(HPT_BUFFER_SIZE, GFP_KERNEL);
-		if (!hpt->buffers[i].data_combined) {
-			pr_err("Failed to allocate combined buffer %d\n", i);
-			return -ENOMEM;
-		}
-		atomic_set(&hpt->buffers[i].in_use, 0);
-    }
-
-    hpt->buffers_allocated = 1;
-    spin_lock_init(&hpt->buffer_lock);
-    pr_info("HPT buffers allocated successfully\n");
-    return 0;
-}
-
-static void hpt_free_buffers(struct hpt_dev *hpt)
-{
-	int i;
-	for (i = 0; i < HPT_BUFFER_COUNT; i++) {
-		
-		if (hpt->buffers[i].data_combined) {
-        	//kfree(hpt->buffers[i].data_combined);
-			vfree(hpt->buffers[i].data_combined);
-			atomic_set(&hpt->buffers[i].in_use, 0);
-   		}
-	}
-	hpt->buffers_allocated = 0;
-	spin_unlock(&hpt->buffer_lock);
-}
-
-static int hpt_mmap(struct file *file, struct vm_area_struct *vma) {
-    struct hpt_dev *hpt = file->private_data;
-    unsigned long pfn;
-    int buffer_idx;
-
-    // Determine the buffer index based on vm_pgoff
-    buffer_idx = vma->vm_pgoff;
-    if (buffer_idx >= HPT_BUFFER_COUNT) {
-        pr_err("Invalid buffer index: %d\n", buffer_idx);
-        return -EINVAL;
-    }
-
-    // Validate the buffer
-    if (!hpt->buffers[buffer_idx].data_combined) {
-        pr_err("Combined buffer not allocated for index %d\n", buffer_idx);
-        return -EINVAL;
-    }
-
-    // Check if the buffer is already in use
-    if (atomic_read(&hpt->buffers[buffer_idx].in_use)) {
-        pr_err("Buffer %d is already in use\n", buffer_idx);
-        return -EBUSY;
-    }
-
-    // Calculate the PFN for the combined buffer
-    //pfn = virt_to_phys(hpt->buffers[buffer_idx].data_combined) >> PAGE_SHIFT;
-	pfn = vmalloc_to_pfn(hpt->buffers[buffer_idx].data_combined);
-
-    // Map the combined buffer to user space
-    if (remap_pfn_range(vma, vma->vm_start, pfn, HPT_BUFFER_SIZE, vma->vm_page_prot)) {
-        pr_err("Failed to map combined buffer: idx=%d pfn=%lx\n", buffer_idx, pfn);
-        return -EFAULT;
-    }
-
-    // Mark the buffer as in use
-    atomic_set(&hpt->buffers[buffer_idx].in_use, 1);
-
-    pr_info("Mapped combined buffer for index %d\n", buffer_idx);
-    return 0;
-}
-
-//=====================================================================
-
-static int hpt_dbgfs_tun_create(struct hpt_dev *hpt, const char *name)
-{
-	struct dentry *tun_dir;
-
-	tun_dir = debugfs_create_dir(name, hmi.hmi_dbgfs_root);
-	if (IS_ERR(tun_dir)) {
-		pr_err("Cannot create debugfs tunnel directory: %s (%ld)\n",
-		       name, PTR_ERR(tun_dir));
-		return PTR_ERR(tun_dir);
-	}
-
-	debugfs_create_u64(HPT_DBGFS_TX_RING_WRITE, 0400, tun_dir,
-			   &hpt->tx_ring->write);
-	debugfs_create_u64(HPT_DBGFS_TX_RING_READ, 0400, tun_dir,
-			   &hpt->tx_ring->read);
-	debugfs_create_u64(HPT_DBGFS_TX_RING_ERRS, 0400, tun_dir,
-			   &hpt->hd_tx_errs);
-	debugfs_create_u64(HPT_DBGFS_TX_RING_LEN_ZERO, 0400, tun_dir,
-			   &hpt->hd_tx_len_zero);
-	debugfs_create_u64(HPT_DBGFS_TX_RING_LEN_OVER, 0400, tun_dir,
-			   &hpt->hd_tx_len_over);
-
-	debugfs_create_u64(HPT_DBGFS_RX_RING_WRITE, 0400, tun_dir,
-			   &hpt->rx_ring->write);
-	debugfs_create_u64(HPT_DBGFS_RX_RING_READ, 0400, tun_dir,
-			   &hpt->rx_ring->read);
-	debugfs_create_u64(HPT_DBGFS_RX_RING_EMPTY, 0400, tun_dir,
-			   &hpt->hd_rx_empty);
-	debugfs_create_u64(HPT_DBGFS_RX_RING_LEN_ZERO, 0400, tun_dir,
-			   &hpt->hd_rx_len_zero);
-	debugfs_create_u64(HPT_DBGFS_RX_RING_LEN_OVER, 0400, tun_dir,
-			   &hpt->hd_rx_len_over);
-	debugfs_create_u64(HPT_DBGFS_RX_RING_PROC, 0400, tun_dir,
-			   &hpt->hd_rx_called);
-	debugfs_create_u64(HPT_DBGFS_RX_RING_NON_IP, 0400, tun_dir,
-			   &hpt->hd_rx_non_ip);
-	debugfs_create_u64(HPT_DBGFS_RX_RING_MEM_ERR, 0400, tun_dir,
-			   &hpt->hd_rx_skb_alloc_err);
-	debugfs_create_u64(HPT_DBGFS_RX_NETIF_DROP, 0400, tun_dir,
-			   &hpt->hd_rx_netif_drop);
-
-	hpt->hd_dbgfs_tun_dir = tun_dir;
-
-	return 0;
-}*/
 
 static int hpt_kernel_thread(void *param)
 {
 	pr_info("Kernel RX thread started!\n");
 	struct hpt_dev *dev = param;
-	//size_t timeout = jiffies + dev->kthread_idle_jiffies;
-	//const long schedule_timout = usecs_to_jiffies(HPT_KTHREAD_RESCHEDULE_INTERVAL);
 
 	while (!kthread_should_stop()) {
 		wait_event_interruptible(dev->read_wait_queue, dev->event_flag);
 		spin_lock(&dev->buffer_lock);
 		dev->event_flag = 0;
 		spin_unlock(&dev->buffer_lock);
-		// Process received packets
 		hpt_net_rx(dev);
-		// Additional tasks, e.g., transmitting processed packets
 	}
 
 	pr_info("Kernel RX thread stopped!\n");
@@ -218,8 +70,6 @@ static int hpt_open(struct inode *inode, struct file *file)
 {
 	pr_info("HPT open!\n");
 
-    //struct hpt_dev *dev = container_of(inode->i_cdev, struct hpt_dev, cdev);
-    //file->private_data = dev;
 	file->private_data = hpt_device;
 
 	int ret;
@@ -251,11 +101,6 @@ static int hpt_release(struct inode *inode, struct file *file)
 	if (!dev) {
 		pr_err("Cannot free unallocated device");
 	}
-
-	//hpt_free_buffers(dev);
-
-	/*if (hpt->hd_dbgfs_tun_dir)
-		debugfs_remove_recursive(hpt->hd_dbgfs_tun_dir);*/
 
 	if (dev->pthread != NULL) {
 		kthread_stop(dev->pthread);
@@ -293,15 +138,6 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
     return 0;
 }
 
-void copy_hpt_dev(struct hpt_dev *to, const struct hpt_dev *from) {
-    strncpy(to->name, from->name, HPT_NAMESIZE);
-    to->class = from->class;
-    to->device = from->device;
-    to->cdev = from->cdev; 
-    to->devt = from->devt;
-    to->pdev = from->pdev;
-}
-
 static int hpt_ioctl_create(struct file *file, struct net *net,
 			    uint32_t ioctl_num, unsigned long ioctl_param)
 {
@@ -323,32 +159,13 @@ static int hpt_ioctl_create(struct file *file, struct net *net,
 
 	dev_net_set(net_dev, net);
 
-	//hpt = netdev_priv(net_dev);
-	//memcpy(hpt, file->private_data, sizeof(struct hpt_dev));
 	hpt = file->private_data;
-	//copy_hpt_dev(hpt, file->private_data);
-
 
 	init_waitqueue_head(&hpt->tx_busy);
 
 	hpt->net_dev = net_dev;
 	pr_info("Set net_dev\n");
 
-	//hpt->ring_buffer_items = dev_info.ring_buffer_items;
-/*
-	if (hpt->ring_buffer_items > HPT_MAX_ITEMS) {
-		pr_err("cannot allocate such a large HPT");
-		ret = -EINVAL;
-		goto clean_up;
-	}
-
-	hpt->num_ring_memory =
-		(sizeof(struct hpt_ring_buffer) * 2) +
-		(hpt->ring_buffer_items * 2 * HPT_RB_ELEMENT_SIZE) +
-		sizeof(uint8_t);
-
-	pr_info("set up pointers");
-*/
 	strncpy(hpt->name, HPT_DEVICE, HPT_NAMESIZE);
 
 	pr_info("Copied in name\n");
@@ -358,11 +175,6 @@ static int hpt_ioctl_create(struct file *file, struct net *net,
 		0x02, 0x00, 0x00, 0x00, 0x00, 0x01
 	};
 	eth_hw_addr_set(net_dev, virtual_mac_addr);
-
-	/*ret = hpt_dbgfs_tun_create(hpt, hpt->name);
-	if (ret)
-		goto clean_up;
-*/
 
 	ret = register_netdevice(net_dev);
 	if (ret) {
@@ -416,8 +228,6 @@ static long hpt_ioctl(struct file *file, uint32_t ioctl_num,
 	struct net *net = NULL;
 	struct hpt_dev *hpt = file->private_data;
 
-	//pr_info("IOCTL num=0x%0x param=0x%0lx\n", ioctl_num, ioctl_param);
-
 	switch (_IOC_NR(ioctl_num)) {
 	case _IOC_NR(HPT_IOCTL_CREATE):
 		rtnl_lock();
@@ -432,7 +242,6 @@ static long hpt_ioctl(struct file *file, uint32_t ioctl_num,
 
 		wake_up_interruptible(&hpt->read_wait_queue);
 		ret = 0;
-		//ret = hpt_ioctl_notify(file, net, ioctl_num, ioctl_param);
 		break;
 	default:
 		pr_info("IOCTL default\n");

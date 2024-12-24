@@ -2,25 +2,38 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdlib.h>
 
-int main() {
-    hpt_handle_t *handle = hpt_open();
-    if (!handle) {
-        return 1;
+int main() 
+{
+    hpt_init();
+
+    const char name[HPT_NAMESIZE] = HPT_DEVICE;
+    struct hpt *hpt = hpt_alloc(name, 1024);
+    if (!hpt) {
+        return -1;
     }
-
-    char read_buf[HPT_BUFFER_SIZE];
+    
+    hpt_buffer_t *tx_buf = malloc(sizeof(hpt_buffer_t));
+    hpt_buffer_t *rx_buf = malloc(sizeof(hpt_buffer_t));
 
     while (true) 
     {
         switch(getchar())
         {
-        case 'q': hpt_close(handle); return 0;
-        case 's': hpt_send(handle); break;
-        case 'w': hpt_write(handle); break;
-        case 'r': hpt_read(handle, read_buf, sizeof(read_buf)); break;
+            case 'q': 
+                hpt_close(hpt); 
+                free(tx_buf); 
+                free(rx_buf); 
+                return 0;
+            case 'w': 
+                hpt_write(hpt, tx_buf); 
+                break;
+            case 'r': 
+                hpt_read(hpt, rx_buf); 
+                break;
         }
-    }
+    }    
 
     return 0;
 }

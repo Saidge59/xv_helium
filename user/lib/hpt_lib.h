@@ -14,21 +14,33 @@ struct ring_buffer {
     //uint32_t buffer_size;
 };
 
-typedef struct hpt_handle {
-    int fd;
+struct hpt {
     void *mapped_buffer;
     struct ring_buffer *ring_tx;
     struct ring_buffer *ring_rx;
-} hpt_handle_t;
+};
 
-hpt_handle_t *hpt_open(void);
-int hpt_close(hpt_handle_t *handle);
-void hpt_send(hpt_handle_t *handle);
-ssize_t hpt_read(hpt_handle_t *handle, void *buf, size_t count);
-void hpt_write(hpt_handle_t *handle);
+int hpt_fd(struct hpt *dev);
+
+typedef struct hpt_buffer {
+  char *base;
+  size_t capacity;
+  size_t len;
+} hpt_buffer_t;
+
+hpt_buffer_t* hpt_get_tx_buffer();
+
+int hpt_init();
+struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t num_ring_items);
+void hpt_close(struct hpt *dev);
+void hpt_write(struct hpt *dev, hpt_buffer_t *buf);
+void hpt_read(struct hpt *dev, hpt_buffer_t *buf);
+void message(hpt_buffer_t *buf);
 
 #define HPT_IOCTL_CREATE _IO(0x92, 1)
 #define HPT_IOCTL_NOTIFY _IO(0x92, 2)
+
+#define HPT_DEVICE "hpt"
 
 #define HPT_BUFFER_SIZE 2048
 #define HPT_NUM_BUFFERS 1024

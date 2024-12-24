@@ -51,74 +51,24 @@ static int hpt_net_tx(struct sk_buff *skb, struct net_device *dev)
 	
 	unsigned int len = skb->len;
 
-	/*
-	if (!len || len > HPT_RB_ELEMENT_USABLE_SPACE) {
-		if (len)
-			hpt->hd_tx_len_over++;
-		else
-			hpt->hd_tx_len_zero++;
-		goto drop;
-	}*/
+	uint32_t write_idx = hpt->ring_rx->write_index;
+	uint32_t next_write = (write_idx + 1) % HPT_NUM_BUFFERS;
+	uint32_t read_idx = hpt->ring_rx->read_index;
 
-	//uint32_t num = hpt->ring_rx->write_index - hpt->ring_rx->read_index;
-	//pr_info("num to read: %u\n", num);
+	if (next_write == read_idx)
+		return -1;
 
-    //for (int i = 0; i < num; i++) {
-		uint32_t write_idx = hpt->ring_rx->write_index;
-    	uint32_t next_write = (write_idx + 1) % HPT_NUM_BUFFERS;
-		if (next_write == hpt->ring_rx->read_index)
-        	return -1;
-
-		uint8_t *buffer_ptr = (uint8_t *)hpt->ring_rx + sizeof(struct ring_buffer) + (write_idx * HPT_BUFFER_SIZE);
-        memcpy(buffer_ptr, skb->data, len);
-		pr_info("buffer: %02x, %02x, %02x, %02x\n", *(uint8_t *)buffer_ptr, *((uint8_t *)buffer_ptr+1),*((uint8_t *)buffer_ptr+2),*((uint8_t *)buffer_ptr+3));
-		
-		dev_kfree_skb(skb);
-    	hpt->ring_rx->write_index = next_write;
-		//dev->stats.tx_bytes += len;
-		//dev->stats.tx_packets++;
-	//}
-
-	pr_info("write_idx: %u, read_index: %u\n", hpt->ring_rx->write_index, hpt->ring_rx->read_index);
-	return NETDEV_TX_OK;
-	/*
-	struct hpt_dev *hpt = netdev_priv(dev);
-	unsigned int len = skb->len;
-
-	if (!len || len > HPT_RB_ELEMENT_USABLE_SPACE) {
-		if (len)
-			hpt->hd_tx_len_over++;
-		else
-			hpt->hd_tx_len_zero++;
-		goto drop;
-	}
-
-	if (unlikely(hpt_rb_tx(hpt->tx_ring, hpt->ring_buffer_items,
-			       hpt->tx_start, skb->data, len) != 0)) {
-		hpt->hd_tx_errs++;
-		goto drop;
-	}
-
+	uint8_t *buffer_ptr = (uint8_t *)hpt->ring_rx + sizeof(struct ring_buffer) + (write_idx * HPT_BUFFER_SIZE);
+	memcpy(buffer_ptr, skb->data, len);
+	
 	dev_kfree_skb(skb);
-	dev->stats.tx_bytes += len;
-	dev->stats.tx_packets++;
-
-	// Wake up the EPOLL
-	wake_up_interruptible(&hpt->tx_busy);
+	hpt->ring_rx->write_index = next_write;
 
 	return NETDEV_TX_OK;
-
-drop:
-	dev_kfree_skb(skb);
-	dev->stats.tx_dropped++;
-
-	return NETDEV_TX_OK;
-	*/
 }
 
 size_t hpt_net_rx(struct hpt_dev *hpt)
 {
-	
     struct net_device *dev = hpt->net_dev;
     struct sk_buff *skb;
     size_t num_processed = 0;
@@ -130,38 +80,12 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
 
     for (int i = 0; i < num; i++) {
 
-        // Check if the buffer is in use
-        /*if (!buffer|| !atomic_read(&buffer->in_use)) {
-			//pr_err("Skip buffers not marked as in use\n");
-            continue;
-        }*/
-
-		//uint32_t write_idx = hpt->ring_tx->write_index;
-		//uint32_t next_write = (write_idx + 1) % HPT_NUM_BUFFERS;
-		//uint32_t read_index = hpt->ring_tx->read_index;
-
-		// Check if buffer is full
-		//if (next_write == read_index)
-        	//return -EAGAIN;
-
 		uint8_t *buffer_ptr = (uint8_t *)hpt->ring_tx + sizeof(struct ring_buffer) + (hpt->ring_tx->read_index * HPT_BUFFER_SIZE);
-
-	   	//pr_info("write_idx: %u, next_write: %u, read_index: %u\n", write_idx, next_write, read_index);
-		//pr_info("buffer: %02x, %02x, %02x, %02x\n", *(uint8_t *)buffer_ptr, *((uint8_t *)buffer_ptr+1),*((uint8_t *)buffer_ptr+2),*((uint8_t *)buffer_ptr+3));
-
-        //hpt->hd_rx_called++;
 
 		size_t len = ((uint16_t)buffer_ptr[2] << 8) | buffer_ptr[3];
 
 		if (unlikely(len == 0 || len > HPT_BUFFER_SIZE)) {
-            /*if (len)
-                hpt->hd_rx_len_over++;
-            else
-                hpt->hd_rx_len_zero++;
-            atomic_set(&buffer->in_use, 0); // Mark the buffer as free
-			*/
 		    dev->stats.rx_dropped++;
-			//pr_err("Skip buffers wrong len\n");
         	continue;
         }
 		pr_info("The packet length is %zu\n", len);
@@ -169,8 +93,6 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
         skb = netdev_alloc_skb(dev, len);
         if (unlikely(!skb)) {
             dev->stats.rx_dropped++;
-            //hpt->hd_rx_skb_alloc_err++;
-            //atomic_set(&buffer->in_use, 0); // Mark the buffer as free
 			pr_err("Could not allocate memory to transmit a packet\n");
         	continue;
         }
@@ -178,16 +100,12 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
         // Copy the decrypted data into the SKB
         memcpy(skb_put(skb, len), buffer_ptr, len);
 
-        // Mark the buffer as free after use
-        //atomic_set(&buffer->in_use, 0);
-
         // Check the IP version (from the start of the buffer)
         ip_version = skb->len ? (skb->data[0] >> 4) : 0;
 
         if (unlikely(!(ip_version == 4 || ip_version == 6))) {
             dev_kfree_skb(skb);
             dev->stats.rx_dropped++;
-            //hpt->hd_rx_non_ip++;
 			pr_err("Drop packets that are not IPv4 or IPv6\n");
         	continue;
         }
@@ -203,10 +121,6 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
         ret = netif_rx(skb);
 		pr_info("The packet send\n");
 
-        /*if (unlikely(ret == NET_RX_DROP)) {
-            hpt->hd_rx_netif_drop++;
-        }*/
-
         // Update statistics
         dev->stats.rx_bytes += len;
         dev->stats.rx_packets++;
@@ -216,100 +130,6 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
 
 	return num_processed;
 }
-
-
-/*
-size_t hpt_net_rx(struct hpt_dev *hpt)
-{
-	struct net_device *dev = hpt->net_dev;
-	struct hpt_ring_buffer_element *elem;
-	struct hpt_ring_buffer *ring;
-	struct sk_buff *skb;
-	size_t num, i, len;
-	int ret;
-	u8 ip_version;
-
-	ring =  hpt->rx_ring;
-
-	num = hpt_rb_count(ring, hpt->ring_buffer_items);
-
-	for (i = 0; i < num; i++) {
-		elem = hpt_rb_rx(ring, hpt->ring_buffer_items,
-				 hpt->rx_start);
-
-		hpt->hd_rx_called++;
-
-		// Userspace can corrupt the ring at any time
-		if (unlikely(!elem)) {
-			hpt->hd_rx_empty++;
-			break;
-		}
-
-		len = elem->len;
-
-		// Check that the length is within bounds at the time we cache the value
-		if (unlikely(len == 0 || len > HPT_RB_ELEMENT_USABLE_SPACE)) {
-			if (len)
-				hpt->hd_rx_len_over++;
-			else
-				hpt->hd_rx_len_zero++;
-			dev->stats.rx_dropped++;
-			hpt_rm_cur_ring_pkt(ring, elem);
-			continue;
-		}
-
-		skb = netdev_alloc_skb(dev, len);
-
-		// Could not allocate memory to transmit a packet 
-		if (unlikely(!skb)) {
-			// If we have to drop a packet due to memory still increment the read header 
-			dev->stats.rx_dropped++;
-			hpt->hd_rx_skb_alloc_err++;
-			hpt_rm_cur_ring_pkt(ring, elem);
-			continue;
-		}
-
-		// Copy the packet into the SKB 
-		memcpy(skb_put(skb, len), elem->data, len);
-
-		// Now the ring element is free to be used again 
-		hpt_rm_cur_ring_pkt(ring, elem);
-
-		// Extract the IP version from the start of the packet (IHL) and drop if it's not IPv4 or IPv6 
-		ip_version = skb->len ? (skb->data[0] >> 4) : 0;
-
-		// Drop packets that are not IPv4 or IPv6 
-		if (unlikely(!(ip_version == 4 || ip_version == 6))) {
-			dev_kfree_skb(skb);
-			dev->stats.rx_dropped++;
-			hpt->hd_rx_non_ip++;
-			continue;
-		}
-
-		// Create SKB headers for this new packet. The SKB will work out its headers from the IP packet data. 
-		skb_reset_mac_header(skb);
-
-		skb->protocol =
-			ip_version == 4 ? htons(ETH_P_IP) : htons(ETH_P_IPV6);
-		skb->ip_summed = CHECKSUM_UNNECESSARY;
-
-		skb_reset_network_header(skb);
-		skb_probe_transport_header(skb);
-
-		// Call netif interface 
-		ret = netif_rx(skb);
-
-		if (unlikely(ret == NET_RX_DROP)) {
-			hpt->hd_rx_netif_drop++;
-		}
-
-		// Update statistics 
-		dev->stats.rx_bytes += len;
-		dev->stats.rx_packets++;
-	}
-
-	return num;
-}*/
 
 #ifdef HAVE_TX_TIMEOUT_TXQUEUE
 static void hpt_net_tx_timeout(struct net_device *dev, unsigned int txqueue)
