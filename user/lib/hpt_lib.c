@@ -174,11 +174,9 @@ void hpt_write(struct hpt *dev, hpt_buffer_t *buf)
                        sizeof(struct ring_buffer) +
                        (write_idx * HPT_BUFFER_SIZE);
 
-    message(buf);
+    //message(buf);
 
-    dev->ring_tx->write_index = next_write;
     
-    printf("wIndx %u, rIndx %u\n", dev->ring_tx->write_index, dev->ring_tx->read_index);
 
     struct timespec start, end;
     uint32_t i = 1;
@@ -186,13 +184,19 @@ void hpt_write(struct hpt *dev, hpt_buffer_t *buf)
 	clock_gettime(CLOCK_MONOTONIC, &start); // Start timing
 	while(i > 0)
 	{
-		ioctl(fd, HPT_IOCTL_NOTIFY, NULL);
+        message(buf);
 		i--;
 	}
+    ioctl(fd, HPT_IOCTL_NOTIFY, NULL);
+
 	//ioctl(fd, HPT_IOCTL_NOTIFY, NULL);
 	clock_gettime(CLOCK_MONOTONIC, &end);   // End timing
 
+
     printf("Time taken to write to buffer: %.2f ns\n", get_time_diff(start, end));
 
+    printf("wIndx %u, rIndx %u\n", dev->ring_tx->write_index, dev->ring_tx->read_index);
+    dev->ring_tx->write_index = next_write;
+    
     printf("wIndx %u, rIndx %u\n", dev->ring_tx->write_index, dev->ring_tx->read_index);
 }

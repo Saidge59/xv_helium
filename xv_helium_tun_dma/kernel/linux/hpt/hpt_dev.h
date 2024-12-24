@@ -90,7 +90,7 @@ struct hpt_mod_info {
 #define	HPT_DBGFS_RX_RING_MEM_ERR	"rx_ring_memory_err"
 #define	HPT_DBGFS_RX_NETIF_DROP 	"rx_netif_drop"
 
-#define HPT_BUFFER_SIZE 2048
+#define HPT_BUFFER_SIZE 4096
 #define HPT_NUM_BUFFERS 1024
 #define HPT_ALLOC_SIZE (HPT_BUFFER_SIZE * HPT_NUM_BUFFERS)
 /**
