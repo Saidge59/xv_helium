@@ -37,21 +37,51 @@ int hpt_init()
     return 0;
 }
 
+void *map_buffers(int fd, int buffer_idx) {
+    void *mapped;
+	
+    size_t page_size = sysconf(_SC_PAGE_SIZE);
+ 
+    mapped = mmap(NULL, HPT_BUFFER_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, buffer_idx * page_size);
+    if (mapped == MAP_FAILED) {
+        perror("Failed to mmap buffers");
+        return NULL;
+    }
+
+    return mapped;
+}
+
 struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t num_ring_items)
 {
     int ret;
-    struct hpt *hpt = malloc(sizeof(struct hpt));
-    if (!hpt)
-    {
-        return NULL;
-    }    
+    struct hpt *dev = malloc(sizeof(struct hpt));
 
-    ret = ioctl(fd, HPT_IOCTL_CREATE, NULL);
+    if(!dev) 
+    {
+        printf("Cannot allocate 'struct hpt'\n");
+        return NULL;
+    }
+
+    if(num_ring_items > HPT_BUFFER_COUNT) 
+    {
+        printf("Too many elements for buffer'\n");
+        return NULL;
+    }
+
+    struct hpt_net_device_info net_dev_info;
+
+    memset(&net_dev_info, 0, sizeof(net_dev_info));
+	net_dev_info.ring_buffer_items = num_ring_items;
+
+	strncpy(net_dev_info.name, name, HPT_NAMESIZE - 1);
+	net_dev_info.name[HPT_NAMESIZE - 1] = 0;
+
+	ret = ioctl(fd, HPT_IOCTL_CREATE, &net_dev_info);
 	if (ret < 0) {
 		return NULL;
 	}
 
-
+/*
     // Map the DMA buffer to user space
     hpt->mapped_buffer = mmap(NULL,
                                  HPT_ALLOC_SIZE * 2,
@@ -68,22 +98,20 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t num_ring_items)
         free(hpt);
         return NULL;
     }
-
-    printf("Mapped buffer: %p\n", hpt->mapped_buffer);
+*/
+    printf("Mapped buffer\n");
 
     // Setup ring buffer control structure
-    hpt->ring_tx = (struct ring_buffer *)hpt->mapped_buffer;
-    hpt->ring_rx = (struct ring_buffer *)hpt->mapped_buffer + (HPT_ALLOC_SIZE / sizeof(struct ring_buffer));
-    printf("ring_tx: %p, ring_rx %p\n", hpt->ring_tx, hpt->ring_rx);
+    //hpt->ring_tx = (struct ring_buffer *)hpt->mapped_buffer;
+    //hpt->ring_rx = (struct ring_buffer *)hpt->mapped_buffer + (HPT_ALLOC_SIZE / sizeof(struct ring_buffer));
+    //printf("ring_tx: %p, ring_rx %p\n", hpt->ring_tx, hpt->ring_rx);
 
-    return hpt;
+    return dev;
 }
 
 void hpt_close(struct hpt *dev)
 {
     if(!dev) return;
-
-    munmap(dev->mapped_buffer, HPT_ALLOC_SIZE * 2);
     close(fd);
     free(dev);
     printf("hpt close\n");
@@ -93,33 +121,29 @@ void hpt_close(struct hpt *dev)
 
 void hpt_read(struct hpt *dev, hpt_buffer_t *buf)
 {
-    if (!dev || !buf)
+    if (!dev)
         return;
-    
-    // Check if buffer is empty
-    if(dev->ring_rx->read_index == dev->ring_rx->write_index)
-    {
-        printf("Buffer is empty\n");
-        return;
+
+    size_t start_len = dev->ring_buffer_items >> 1;
+    for (int i = start_len; i < dev->ring_buffer_items; i++) {
+        buf->base = map_buffers(fd, i);
+        if (!buf->base) {
+            close(fd);
+            free(dev);
+            printf("error map buffer\n");
+            return;
+        }
     }
 
-    // Calculate buffer offset
-    buf->base = (char *)dev->ring_rx + sizeof(struct ring_buffer) + (dev->ring_rx->read_index * HPT_BUFFER_SIZE);
-
-    printf("ring_rx %p, buf->base %p\n", dev->ring_rx, (char *)buf->base);
-
-    // Update read index
-    dev->ring_rx->read_index = (dev->ring_rx->read_index + 1) % HPT_NUM_BUFFERS;
-
-    for(int i = 0; i < HPT_NUM_BUFFERS; i++)
+    for(int i = 0; i < HPT_BUFFER_SIZE; i++)
     {
         printf("%c", buf->base[i]);
     }
 
-    printf("\nrIndx %u\n", dev->ring_rx->read_index);
+	munmap(buf->base, HPT_BUFFER_SIZE);    
 }
 
-void message(hpt_buffer_t *buf)
+void message(void *buf)
 {
     unsigned char ip_header[] = {
         0x45, 0x00, 0x00, 0x00, 
@@ -149,34 +173,30 @@ void message(hpt_buffer_t *buf)
     udp_header[4] = (udp_len >> 8) & 0xFF;
     udp_header[5] = udp_len & 0xFF;
 
-    memcpy(buf->base, ip_header, sizeof(ip_header));
-    memcpy(buf->base + sizeof(ip_header), udp_header, sizeof(udp_header));
-    memcpy(buf->base + sizeof(ip_header) + sizeof(udp_header), payload, payload_len);
+    memcpy(buf, ip_header, sizeof(ip_header));
+    memcpy(buf + sizeof(ip_header), udp_header, sizeof(udp_header));
+    memcpy(buf + sizeof(ip_header) + sizeof(udp_header), payload, payload_len);
 
-    buf->capacity = HPT_NUM_BUFFERS;
-    buf->len = HPT_BUFFER_SIZE;
+    //buf->capacity = HPT_NUM_BUFFERS;
+    //buf->len = HPT_BUFFER_SIZE;
 	buff_ind++;
 }
 
 void hpt_write(struct hpt *dev, hpt_buffer_t *buf)
 {
-    uint32_t write_idx = dev->ring_tx->write_index;
-    uint32_t next_write = (write_idx + 1) % HPT_NUM_BUFFERS;
-
-    // Check if buffer is full
-    if (next_write == dev->ring_tx->read_index)
-    {
-        printf("Buffer is full\n");
+    if (!dev)
         return;
+
+    size_t end_len = dev->ring_buffer_items >> 1;
+    for (int i = 0; i < end_len; i++) {
+        dev->mapped_buffer = map_buffers(fd, i);
+        if (!dev->mapped_buffer) {
+            close(fd);
+            free(dev);
+            printf("error map buffer\n");
+            return;
+        }
     }
-
-    buf->base = (char *)dev->mapped_buffer +
-                       sizeof(struct ring_buffer) +
-                       (write_idx * HPT_BUFFER_SIZE);
-
-    //message(buf);
-
-    
 
     struct timespec start, end;
     uint32_t i = 1;
@@ -184,7 +204,7 @@ void hpt_write(struct hpt *dev, hpt_buffer_t *buf)
 	clock_gettime(CLOCK_MONOTONIC, &start); // Start timing
 	while(i > 0)
 	{
-        message(buf);
+        message(dev->mapped_buffer);
 		i--;
 	}
     ioctl(fd, HPT_IOCTL_NOTIFY, NULL);
@@ -192,11 +212,7 @@ void hpt_write(struct hpt *dev, hpt_buffer_t *buf)
 	//ioctl(fd, HPT_IOCTL_NOTIFY, NULL);
 	clock_gettime(CLOCK_MONOTONIC, &end);   // End timing
 
-
     printf("Time taken to write to buffer: %.2f ns\n", get_time_diff(start, end));
 
-    printf("wIndx %u, rIndx %u\n", dev->ring_tx->write_index, dev->ring_tx->read_index);
-    dev->ring_tx->write_index = next_write;
-    
-    printf("wIndx %u, rIndx %u\n", dev->ring_tx->write_index, dev->ring_tx->read_index);
+    munmap(buf->base, HPT_BUFFER_SIZE);    
 }

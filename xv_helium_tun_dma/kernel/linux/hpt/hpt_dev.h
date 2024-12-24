@@ -36,27 +36,31 @@
 #endif
 
 #define HPT_KTHREAD_RESCHEDULE_INTERVAL 0 /* us */
+#define HPT_BUFFER_COUNT 65535
+#define HPT_BUFFER_SIZE 4096
+#define HPT_NUM_BUFFERS 1024
+//#define HPT_ALLOC_SIZE (HPT_BUFFER_SIZE * HPT_NUM_BUFFERS)
 
-//#define HPT_BUFFER_COUNT 1024
+struct hpt_net_device_info {
+	char name[HPT_NAMESIZE];
+	size_t ring_buffer_items;
+};
 
-struct ring_buffer {
-    uint32_t write_index;
-    uint32_t read_index;
-    //uint32_t buffer_size;
-    //uint32_t num_buffers;
+struct hpt_dma_buffer {
+	void *data_combined;              
+    atomic_t in_use;
 };
 
 struct hpt_dev {
 	char name[HPT_NAMESIZE];
+	size_t ring_buffer_items;
     struct class *class;
     struct device *device;
     struct cdev cdev;
     dev_t devt;
-    void *buffer_base;
+    struct hpt_dma_buffer buffers[HPT_BUFFER_COUNT]; // Buffer pool
     struct platform_device *pdev;
     dma_addr_t dma_handle;
-    struct ring_buffer *ring_tx;
-    struct ring_buffer *ring_rx;
     struct mutex lock;
 	struct task_struct *pthread;
 	struct net_device *net_dev;
@@ -90,9 +94,6 @@ struct hpt_mod_info {
 #define	HPT_DBGFS_RX_RING_MEM_ERR	"rx_ring_memory_err"
 #define	HPT_DBGFS_RX_NETIF_DROP 	"rx_netif_drop"
 
-#define HPT_BUFFER_SIZE 4096
-#define HPT_NUM_BUFFERS 1024
-#define HPT_ALLOC_SIZE (HPT_BUFFER_SIZE * HPT_NUM_BUFFERS)
 /**
  * This function will drain any packets that have been sent to us from userspace
  * and send them to the kernel for processing. It's called by the rx kernel

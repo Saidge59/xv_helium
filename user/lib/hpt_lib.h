@@ -6,18 +6,19 @@
 #include <sys/types.h>  // For ssize_t
 
 #define HPT_NAMESIZE 32
+#define HPT_BUFFER_COUNT 65535
+#define HPT_BUFFER_SIZE 4096
+#define HPT_NUM_BUFFERS 1024
 
-struct ring_buffer {
-    uint32_t write_index;
-    uint32_t read_index;
-    //uint32_t num_buffers;
-    //uint32_t buffer_size;
+struct hpt_net_device_info {
+	char name[HPT_NAMESIZE];
+	size_t ring_buffer_items;
 };
 
 struct hpt {
-    void *mapped_buffer;
-    struct ring_buffer *ring_tx;
-    struct ring_buffer *ring_rx;
+    //void *mapped_buffer;
+    void *mapped_buffer; 
+    size_t ring_buffer_items;
 };
 
 int hpt_fd(struct hpt *dev);
@@ -35,15 +36,11 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t num_ring_items);
 void hpt_close(struct hpt *dev);
 void hpt_write(struct hpt *dev, hpt_buffer_t *buf);
 void hpt_read(struct hpt *dev, hpt_buffer_t *buf);
-void message(hpt_buffer_t *buf);
+void message(void *buf);
 
-#define HPT_IOCTL_CREATE _IO(0x92, 1)
+#define HPT_IOCTL_CREATE _IOWR(0x92, 1, struct hpt_net_device_info)
 #define HPT_IOCTL_NOTIFY _IO(0x92, 2)
 
 #define HPT_DEVICE "hpt"
-
-#define HPT_BUFFER_SIZE 2048
-#define HPT_NUM_BUFFERS 1024
-#define HPT_ALLOC_SIZE (HPT_BUFFER_SIZE * HPT_NUM_BUFFERS)
 
 #endif // HPT_LIB_H

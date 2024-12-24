@@ -43,26 +43,23 @@ static int hpt_net_config(struct net_device *dev, struct ifmap *map)
 static int hpt_net_tx(struct sk_buff *skb, struct net_device *dev)
 {
 	struct hpt_dev *hpt = hpt_device;
-	if(!hpt || !hpt->ring_tx)
+	if(!hpt)
 	{
 		pr_err("hpt is null\n");
 		return NETDEV_TX_OK;
 	}
 	
-	unsigned int len = skb->len;
+	size_t start = (hpt->ring_buffer_items >> 1);
 
-	uint32_t write_idx = hpt->ring_rx->write_index;
-	uint32_t next_write = (write_idx + 1) % HPT_NUM_BUFFERS;
-	uint32_t read_idx = hpt->ring_rx->read_index;
+	for(int i = start; i < hpt->ring_buffer_items; i++) 
+	{
+		struct hpt_dma_buffer *buffer = &hpt->buffers[i];
+		if(!buffer || !atomic_read(&buffer->in_use)) continue;
 
-	if (next_write == read_idx)
-		return -1;
-
-	uint8_t *buffer_ptr = (uint8_t *)hpt->ring_rx + sizeof(struct ring_buffer) + (write_idx * HPT_BUFFER_SIZE);
-	memcpy(buffer_ptr, skb->data, len);
+		memcpy(buffer->data_combined, skb->data, skb->len);
 	
-	dev_kfree_skb(skb);
-	hpt->ring_rx->write_index = next_write;
+		dev_kfree_skb(skb);
+	}
 
 	return NETDEV_TX_OK;
 }
@@ -75,35 +72,40 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
     int ret;
     u8 ip_version;
 
-	uint32_t num = hpt->ring_tx->write_index - hpt->ring_tx->read_index;
-	pr_info("num to send: %u\n", num);
+	size_t end = (hpt->ring_buffer_items >> 1);
 
-    for (int i = 0; i < num; i++) {
+    for(int i = 0; i < end; i++) 
+	{
+        struct hpt_dma_buffer *buffer = &hpt->buffers[i];
 
-		uint8_t *buffer_ptr = (uint8_t *)hpt->ring_tx + sizeof(struct ring_buffer) + (hpt->ring_tx->read_index * HPT_BUFFER_SIZE);
+        if(!buffer || !atomic_read(&buffer->in_use)) continue;
 
-		size_t len = ((uint16_t)buffer_ptr[2] << 8) | buffer_ptr[3];
+		uint8_t *data = (uint8_t *)buffer->data_combined;
+		size_t len = ((uint16_t)data[2] << 8) | data[3];
 
-		if (unlikely(len == 0 || len > HPT_BUFFER_SIZE)) {
+		if(unlikely(len == 0 || len > HPT_BUFFER_SIZE)) {
 		    dev->stats.rx_dropped++;
+			atomic_set(&buffer->in_use, 0);
         	continue;
         }
 		pr_info("The packet length is %zu\n", len);
 
         skb = netdev_alloc_skb(dev, len);
-        if (unlikely(!skb)) {
+        if(unlikely(!skb)) {
             dev->stats.rx_dropped++;
+        	atomic_set(&buffer->in_use, 0);
 			pr_err("Could not allocate memory to transmit a packet\n");
         	continue;
         }
 
         // Copy the decrypted data into the SKB
-        memcpy(skb_put(skb, len), buffer_ptr, len);
+        memcpy(skb_put(skb, len), buffer->data_combined, len);
+        atomic_set(&buffer->in_use, 0);
 
         // Check the IP version (from the start of the buffer)
         ip_version = skb->len ? (skb->data[0] >> 4) : 0;
 
-        if (unlikely(!(ip_version == 4 || ip_version == 6))) {
+        if(unlikely(!(ip_version == 4 || ip_version == 6))) {
             dev_kfree_skb(skb);
             dev->stats.rx_dropped++;
 			pr_err("Drop packets that are not IPv4 or IPv6\n");
@@ -125,7 +127,6 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
         dev->stats.rx_bytes += len;
         dev->stats.rx_packets++;
         num_processed++;
-		hpt->ring_tx->read_index = (hpt->ring_tx->read_index + 1) % HPT_NUM_BUFFERS;
     }
 
 	return num_processed;

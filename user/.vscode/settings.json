@@ -4,6 +4,14 @@
         "fcntl.h": "c",
         "stdbool.h": "c",
         "stdint.h": "c",
-        "string.h": "c"
+        "string.h": "c",
+        "typeinfo": "c",
+        "array": "c",
+        "deque": "c",
+        "string": "c",
+        "unordered_map": "c",
+        "vector": "c",
+        "string_view": "c",
+        "initializer_list": "c"
     }
 }

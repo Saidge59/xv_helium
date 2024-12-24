@@ -9,13 +9,13 @@ int main()
     hpt_init();
 
     const char name[HPT_NAMESIZE] = HPT_DEVICE;
-    struct hpt *hpt = hpt_alloc(name, 1024);
+    struct hpt *hpt = hpt_alloc(name, 10);
     if (!hpt) {
         return -1;
     }
     
-    hpt_buffer_t *tx_buf = malloc(sizeof(hpt_buffer_t));
-    hpt_buffer_t *rx_buf = malloc(sizeof(hpt_buffer_t));
+    hpt_buffer_t *tx_buf = NULL;
+    hpt_buffer_t *rx_buf = NULL;
 
     while (true) 
     {
@@ -23,8 +23,8 @@ int main()
         {
             case 'q': 
                 hpt_close(hpt); 
-                free(tx_buf); 
-                free(rx_buf); 
+                //free(tx_buf); 
+                //free(rx_buf); 
                 return 0;
             case 'w': 
                 hpt_write(hpt, tx_buf); 
