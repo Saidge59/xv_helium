@@ -102,7 +102,7 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
 		hpt_data_info_t *data_info = (hpt_data_info_t *)buffer->data_combined;
         //if(!buffer || !atomic_read(&buffer->in_use)) continue;
 
-        if(!ACQUIRE(&data_info->in_use)) continue;
+        if(!ACQUIRE(&data_info->in_use) || !ACQUIRE(&data_info->ready_flag_rx)) continue;
 
 		uint8_t *data = (uint8_t *)data_info + sizeof(hpt_data_info_t);
 		//pr_info("Buf %02x, %02x, %02x, %02x\n", data[0], data[1], data[2], data[3]);
@@ -131,6 +131,7 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
         memcpy(skb_put(skb, len), data, len);
         //atomic_set(&buffer->in_use, 0);
 		STORE(&data_info->in_use, 0);
+		STORE(&data_info->ready_flag_rx, 0);
 
         // Check the IP version (from the start of the buffer)
         ip_version = skb->len ? (skb->data[0] >> 4) : 0;

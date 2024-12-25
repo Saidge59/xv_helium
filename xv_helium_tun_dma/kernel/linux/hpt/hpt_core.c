@@ -31,12 +31,21 @@ static int hpt_kernel_thread(void *param)
 
 	while (!kthread_should_stop()) {
 		wait_event_interruptible(dev->read_wait_queue, dev->event_flag);
-		spin_lock(&dev->buffer_lock);
+		//spin_lock(&dev->buffer_lock);
 		dev->event_flag = 0;
-		spin_unlock(&dev->buffer_lock);
+		//STORE(&dev->event_flag, 0);
+		//spin_unlock(&dev->buffer_lock);
 		hpt_net_rx(dev);
 	}
 
+/*
+	while (!kthread_should_stop()) 
+	{
+		//hpt_net_rx(dev);
+		cpu_relax();
+		ndelay(1000);
+    }
+*/
 	pr_info("Kernel RX thread stopped!\n");
 	return 0;
 }
@@ -319,11 +328,12 @@ static long hpt_ioctl(struct file *file, uint32_t ioctl_num,
 		rtnl_unlock();
 		break;
 	case _IOC_NR(HPT_IOCTL_NOTIFY):
-		spin_lock(&hpt->buffer_lock);
+		//spin_lock(&hpt->buffer_lock);
 		hpt->event_flag = 1;
-		spin_unlock(&hpt->buffer_lock);
+		//STORE(&hpt->event_flag, 1);
+		//spin_unlock(&hpt->buffer_lock);
 
-		wake_up_interruptible(&hpt->read_wait_queue);
+		//wake_up_interruptible(&hpt->read_wait_queue);
 		ret = 0;
 		break;
 	default:
@@ -395,7 +405,7 @@ static int __init hpt_init(void)
     }
 
     // Set DMA mask with parent device
-    ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
+    ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
     if (ret) {
         pr_err("Failed to set DMA mask\n");
         goto err_destroy_device;
@@ -438,7 +448,7 @@ static void __exit hpt_exit(void)
     class_destroy(hpt_device->class);
     cdev_del(&hpt_device->cdev);
     unregister_chrdev_region(hpt_device->devt, 1);
-    kfree(hpt_device);
+    //kfree(hpt_device);
 	pr_info("Exit HPT!\n");
 }
 

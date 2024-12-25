@@ -93,6 +93,8 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t num_ring_items)
             printf("error map buffer\n");
             return NULL;
         }
+        hpt_data_info_t *data_info = (hpt_data_info_t *)dev->buffers[i].data_combined;
+        data_info->ready_flag_rx = 0;
     }
 
     printf("Allocate buffer success!\n");
@@ -159,6 +161,7 @@ void hpt_write(struct hpt *dev, hpt_buffer_t *buf)
 
         if(check_time(data_info)) return;
         data_info->in_use = 1;
+        data_info->ready_flag_rx = 1;
 
         break;
     }
@@ -224,8 +227,8 @@ int check_time(hpt_data_info_t *data_info)
 	while(i++ < size)
 	{
         if(message(data_info)) return -1;
+        //ioctl(fd, HPT_IOCTL_NOTIFY, NULL);
 	}
-    ioctl(fd, HPT_IOCTL_NOTIFY, NULL);
 
 	clock_gettime(CLOCK_MONOTONIC, &end);
 

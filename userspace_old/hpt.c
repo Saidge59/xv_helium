@@ -46,6 +46,8 @@ struct hpt {
 };
 
 static volatile int hpt_fd = -1;
+uint8_t buff_ind;
+int message(uint8_t *data);
 
 static inline double get_time_diff(struct timespec start, struct timespec end) {
     return (end.tv_sec - start.tv_sec) * 1e9 + (end.tv_nsec - start.tv_nsec);
@@ -196,23 +198,62 @@ void hpt_drain(struct hpt *state)
 void hpt_write(struct hpt *state, uint8_t *ip_pkt, size_t len)
 {
 	printf("hpt_write\n");
-	hpt_rb_tx(state->rx_ring, state->rb_size, state->rx_start, ip_pkt, len);
 			
 	struct timespec start, end;
+	uint32_t size = 1000;
+	uint32_t i = 0;
 
 	clock_gettime(CLOCK_MONOTONIC, &start); // Start timing
-	uint32_t i = 83333;
-	while(i > 0)
+
+	while(i++ < size)
 	{
+		//message(ip_pkt);
+		hpt_rb_tx(state->rx_ring, state->rb_size, state->rx_start, ip_pkt, len);
 		ioctl(hpt_fd, HPT_IOCTL_NOTIFY, NULL);
-		i--;
 	}
-	//ioctl(hpt_fd, HPT_IOCTL_NOTIFY, NULL);
 	clock_gettime(CLOCK_MONOTONIC, &end);   // End timing
 
-    printf("Time taken to write to buffer: %.2f ns\n", get_time_diff(start, end));
+   	uint32_t time = (uint32_t)get_time_diff(start, end);
+    printf("Time of all buffers %u ns, one buffer %u ns\n", time, time/size);
+}
 
-	/*if (ACQUIRE(state->kthread_needs_wake)) {
-		ioctl(hpt_fd, HPT_IOCTL_NOTIFY, NULL);
-	}*/
+
+int message(uint8_t *data)
+{
+    unsigned char ip_header[] = {
+        0x45, 0x00, 0x00, 0x00, 
+        0x1C, 0x46, 0x40, 0x00, 
+        0x40, 0x11, 0x00, 0x00, 
+        0xC0, 0xA8, 0x1F, 0xC8, // 192.168.31.200
+        0xC0, 0xA8, 0x1F, 0xC9  // 192.168.31.201
+    };
+
+    unsigned char udp_header[] = {
+        0x48, 0x1D, 0x6C, 0x5C,
+        0x00, 0x00, 0x00, 0x00
+    };
+
+    const size_t len = 1024;
+    char payload[len];
+	char ch = 'a' + buff_ind;
+    memset(payload, ch, len);
+    size_t payload_len = strlen(payload);
+
+    size_t udp_len = sizeof(udp_header) + payload_len;
+    size_t ip_len = sizeof(ip_header) + udp_len;
+
+    ip_header[2] = (ip_len >> 8) & 0xFF;
+    ip_header[3] = ip_len & 0xFF;
+
+    udp_header[4] = (udp_len >> 8) & 0xFF;
+    udp_header[5] = udp_len & 0xFF;
+
+    size_t size = sizeof(ip_header) + sizeof(udp_header) + payload_len;
+
+    memcpy(data, ip_header, sizeof(ip_header));
+    memcpy(data + sizeof(ip_header), udp_header, sizeof(udp_header));
+    memcpy(data + sizeof(ip_header) + sizeof(udp_header), payload, payload_len);
+
+	buff_ind++;
+    return 0;
 }
