@@ -50,6 +50,7 @@ static int hpt_net_tx(struct sk_buff *skb, struct net_device *dev)
 	}
 	
 	size_t start = (hpt->ring_buffer_items >> 1);
+	pr_info("start %zu\n", start);
 
 	for(int i = start; i < hpt->ring_buffer_items; i++) 
 	{
@@ -81,7 +82,10 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
         if(!buffer || !atomic_read(&buffer->in_use)) continue;
 
 		uint8_t *data = (uint8_t *)buffer->data_combined;
+		pr_info("Buf %02x, %02x, %02x, %02x\n", data[0], data[1], data[2], data[3]);
+
 		size_t len = ((uint16_t)data[2] << 8) | data[3];
+		pr_info("The index %d, len %zu\n", i, len);
 
 		if(unlikely(len == 0 || len > HPT_BUFFER_SIZE)) {
 		    dev->stats.rx_dropped++;

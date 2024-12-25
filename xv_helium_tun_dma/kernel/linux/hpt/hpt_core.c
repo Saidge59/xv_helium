@@ -193,8 +193,7 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
 
 	// Mark the buffer as in use
     atomic_set(&dev->buffers[buffer_idx].in_use, 1);
-
-    pr_info("Mapped combined buffer for index %d\n", buffer_idx);
+    pr_info("Mapped combined buffer for index %d, addr %p\n", buffer_idx, dev->buffers[buffer_idx].data_combined);
 
     return 0;
 }

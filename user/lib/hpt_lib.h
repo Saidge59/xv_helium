@@ -15,9 +15,14 @@ struct hpt_net_device_info {
 	size_t ring_buffer_items;
 };
 
+typedef struct hpt_dma_buffer {
+	void *data_combined;              
+  int in_use;
+} hpt_dma_buffer_t;
+
 struct hpt {
     //void *mapped_buffer;
-    void *mapped_buffer; 
+    hpt_dma_buffer_t buffers[HPT_BUFFER_COUNT];
     size_t ring_buffer_items;
 };
 

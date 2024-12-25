@@ -14,6 +14,8 @@
 
 uint8_t buff_ind;
 int fd;
+uint32_t tx_ind;
+uint32_t rx_ind;
 
 static inline double get_time_diff(struct timespec start, struct timespec end) {
     return (end.tv_sec - start.tv_sec) * 1e9 + (end.tv_nsec - start.tv_nsec);
@@ -99,6 +101,7 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t num_ring_items)
         return NULL;
     }
 */
+    dev->ring_buffer_items = num_ring_items;
     printf("Mapped buffer\n");
 
     // Setup ring buffer control structure
@@ -125,15 +128,16 @@ void hpt_read(struct hpt *dev, hpt_buffer_t *buf)
         return;
 
     size_t start_len = dev->ring_buffer_items >> 1;
-    for (int i = start_len; i < dev->ring_buffer_items; i++) {
-        buf->base = map_buffers(fd, i);
-        if (!buf->base) {
-            close(fd);
-            free(dev);
-            printf("error map buffer\n");
-            return;
-        }
+    rx_ind = (rx_ind % start_len) + start_len;
+
+    buf->base = map_buffers(fd, rx_ind++);
+    if (!buf->base) {
+        close(fd);
+        free(dev);
+        printf("error map buffer\n");
+        return;
     }
+    printf("Map %p\n", dev->buffers);
 
     for(int i = 0; i < HPT_BUFFER_SIZE; i++)
     {
@@ -188,15 +192,21 @@ void hpt_write(struct hpt *dev, hpt_buffer_t *buf)
         return;
 
     size_t end_len = dev->ring_buffer_items >> 1;
-    for (int i = 0; i < end_len; i++) {
-        dev->mapped_buffer = map_buffers(fd, i);
-        if (!dev->mapped_buffer) {
-            close(fd);
-            free(dev);
-            printf("error map buffer\n");
-            return;
-        }
+    tx_ind = tx_ind % end_len;
+    printf("tx_ind %d\n", tx_ind);
+
+
+    dev->buffers[tx_ind].data_combined = map_buffers(fd, tx_ind);
+    if (!dev->buffers[tx_ind].data_combined) {
+        close(fd);
+        free(dev);
+        printf("error map buffer\n");
+        return;
     }
+    printf("Buffer %d mapped at %p\n", tx_ind, dev->buffers[tx_ind].data_combined);
+    
+
+    //printf("Map %p\n", dev->mapped_buffer);
 
     struct timespec start, end;
     uint32_t i = 1;
@@ -204,7 +214,7 @@ void hpt_write(struct hpt *dev, hpt_buffer_t *buf)
 	clock_gettime(CLOCK_MONOTONIC, &start); // Start timing
 	while(i > 0)
 	{
-        message(dev->mapped_buffer);
+        message(dev->buffers[tx_ind].data_combined);
 		i--;
 	}
     ioctl(fd, HPT_IOCTL_NOTIFY, NULL);
@@ -212,7 +222,14 @@ void hpt_write(struct hpt *dev, hpt_buffer_t *buf)
 	//ioctl(fd, HPT_IOCTL_NOTIFY, NULL);
 	clock_gettime(CLOCK_MONOTONIC, &end);   // End timing
 
+    for(int i = 0; i < 5; i++)
+    {
+        uint8_t *data = ((uint8_t *)dev->buffers[tx_ind].data_combined); 
+        printf("%02x ", data[i]);
+    }
+    printf("\n");
     printf("Time taken to write to buffer: %.2f ns\n", get_time_diff(start, end));
 
-    munmap(buf->base, HPT_BUFFER_SIZE);    
+    munmap(dev->buffers[tx_ind].data_combined, HPT_BUFFER_SIZE);    
+    tx_ind++;
 }

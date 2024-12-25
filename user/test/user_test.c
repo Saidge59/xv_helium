@@ -15,7 +15,7 @@ int main()
     }
     
     hpt_buffer_t *tx_buf = NULL;
-    hpt_buffer_t *rx_buf = NULL;
+    hpt_buffer_t *rx_buf = malloc(sizeof(hpt_buffer_t));
 
     while (true) 
     {
@@ -24,7 +24,7 @@ int main()
             case 'q': 
                 hpt_close(hpt); 
                 //free(tx_buf); 
-                //free(rx_buf); 
+                free(rx_buf); 
                 return 0;
             case 'w': 
                 hpt_write(hpt, tx_buf); 
