@@ -46,9 +46,13 @@ struct hpt_net_device_info {
 	size_t ring_buffer_items;
 };
 
+typedef struct hpt_data_info {
+    int in_use;
+	size_t size;
+}hpt_data_info_t;
+
 struct hpt_dma_buffer {
 	void *data_combined;              
-    atomic_t in_use;
 	dma_addr_t dma_handle;
 };
 

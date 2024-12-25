@@ -9,13 +9,15 @@ int main()
     hpt_init();
 
     const char name[HPT_NAMESIZE] = HPT_DEVICE;
-    struct hpt *hpt = hpt_alloc(name, 10);
+    struct hpt *hpt = hpt_alloc(name, 8192);
     if (!hpt) {
         return -1;
     }
     
-    hpt_buffer_t *tx_buf = NULL;
-    hpt_buffer_t *rx_buf = malloc(sizeof(hpt_buffer_t));
+    hpt_buffer_t rx_buf;
+    memset(&rx_buf, 0, sizeof(rx_buf));
+
+    rx_buf.base = malloc(sizeof(hpt_buffer_t));
 
     while (true) 
     {
@@ -23,14 +25,13 @@ int main()
         {
             case 'q': 
                 hpt_close(hpt); 
-                //free(tx_buf); 
-                free(rx_buf); 
+                free(rx_buf.base); 
                 return 0;
             case 'w': 
-                hpt_write(hpt, tx_buf); 
+                hpt_write(hpt, NULL); 
                 break;
             case 'r': 
-                hpt_read(hpt, rx_buf); 
+                hpt_read(hpt, &rx_buf); 
                 break;
         }
     }    

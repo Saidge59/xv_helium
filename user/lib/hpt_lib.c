@@ -14,11 +14,9 @@
 
 uint8_t buff_ind;
 int fd;
-uint32_t tx_ind;
-uint32_t rx_ind;
 
 static inline double get_time_diff(struct timespec start, struct timespec end) {
-    return (end.tv_sec - start.tv_sec) * 1e9 + (end.tv_nsec - start.tv_nsec);
+    return(end.tv_sec - start.tv_sec) * 1e9 + (end.tv_nsec - start.tv_nsec);
 }
 
 int hpt_fd(struct hpt *dev)
@@ -29,7 +27,7 @@ int hpt_fd(struct hpt *dev)
 int hpt_init()
 {
     fd = open("/dev/hpt", O_RDWR);
-    if (fd < 0)
+    if(fd < 0)
     {
         printf("error open /dev/hpt\n");
         return -1;
@@ -45,7 +43,7 @@ void *map_buffers(int fd, int buffer_idx) {
     size_t page_size = sysconf(_SC_PAGE_SIZE);
  
     mapped = mmap(NULL, HPT_BUFFER_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, buffer_idx * page_size);
-    if (mapped == MAP_FAILED) {
+    if(mapped == MAP_FAILED) {
         perror("Failed to mmap buffers");
         return NULL;
     }
@@ -83,29 +81,10 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t num_ring_items)
 		return NULL;
 	}
 
-/*
-    // Map the DMA buffer to user space
-    hpt->mapped_buffer = mmap(NULL,
-                                 HPT_ALLOC_SIZE * 2,
-                                 PROT_READ | PROT_WRITE,
-                                 MAP_SHARED,
-                                 fd,
-                                 0);
-
-
-    if (hpt->mapped_buffer == MAP_FAILED)
-    {
-        printf("mmap failed\n");
-        close(fd);
-        free(hpt);
-        return NULL;
-    }
-*/
     dev->ring_buffer_items = num_ring_items;
 
-    size_t start_len = num_ring_items >> 1;
 
-    for(int i = start_len; i < num_ring_items; i++)
+    for(int i = 0; i < num_ring_items; i++)
     {
         dev->buffers[i].data_combined = map_buffers(fd, i);
         if (!dev->buffers[i].data_combined) {
@@ -114,14 +93,9 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t num_ring_items)
             printf("error map buffer\n");
             return NULL;
         }
-        
     }
 
-    printf("Mapped buffer\n");
-    // Setup ring buffer control structure
-    //hpt->ring_tx = (struct ring_buffer *)hpt->mapped_buffer;
-    //hpt->ring_rx = (struct ring_buffer *)hpt->mapped_buffer + (HPT_ALLOC_SIZE / sizeof(struct ring_buffer));
-    //printf("ring_tx: %p, ring_rx %p\n", hpt->ring_tx, hpt->ring_rx);
+    printf("Allocate buffer success!\n");
 
     return dev;
 }
@@ -138,29 +112,62 @@ void hpt_close(struct hpt *dev)
 
 void hpt_read(struct hpt *dev, hpt_buffer_t *buf)
 {
-    if (!dev)
-        return;
+    if(!dev) return;
 
-    size_t start_len = dev->ring_buffer_items >> 1;
-    rx_ind = (rx_ind % start_len) + start_len;
-    printf("rx_ind %d\n", rx_ind);
+	size_t start = dev->ring_buffer_items >> 1;
+    size_t end = dev->ring_buffer_items;
 
-    //memcpy(buf->base, dev->buffers[rx_ind].data_combined, HPT_BUFFER_SIZE);
-
-    char *data = dev->buffers[rx_ind].data_combined;
-    printf("in_use %d\n", dev->buffers[rx_ind].in_use);
-
-    for(int i = 0; i < HPT_BUFFER_SIZE; i++)
+    for(int i = start; i < end; i++)
     {
-        printf("%c", data[i]);
-    }
+        struct hpt_dma_buffer *buffer = &dev->buffers[i];
+        hpt_data_info_t *data_info = (hpt_data_info_t *)buffer->data_combined;
+        uint8_t *data = (uint8_t *)data_info + sizeof(hpt_data_info_t);
 
-	//munmap(dev->buffers[rx_ind].data_combined, HPT_BUFFER_SIZE);  
-    rx_ind++;  
+        if(!data_info->in_use) continue;
+
+        if(data_info->size > (HPT_BUFFER_SIZE - sizeof(hpt_data_info_t)))
+        {
+            printf("Too big a packet for write\n");
+            data_info->in_use = 0;
+            continue;
+        }
+
+        memcpy(buf->base, data, data_info->size);
+        data_info->in_use = 0;
+
+        for(int i = 0; i < HPT_BUFFER_SIZE; i++)
+        {
+            printf("%c", ((char *)buf->base)[i]);
+        }
+        printf("\n=========================\n");
+    }
 }
 
-void message(void *buf)
+void hpt_write(struct hpt *dev, hpt_buffer_t *buf)
 {
+    if(!dev) return;
+
+    size_t start = 0;
+    size_t end = dev->ring_buffer_items >> 1;
+
+    for(int i = start; i < end; i++)
+    {
+        struct hpt_dma_buffer *buffer = &dev->buffers[i];
+        hpt_data_info_t *data_info = (hpt_data_info_t *)buffer->data_combined;
+
+        if(data_info->in_use) continue;
+
+        if(check_time(data_info)) return;
+        data_info->in_use = 1;
+
+        break;
+    }
+}
+
+int message(hpt_data_info_t *data_info)
+{
+    uint8_t *data = (uint8_t *)data_info + sizeof(hpt_data_info_t);
+
     unsigned char ip_header[] = {
         0x45, 0x00, 0x00, 0x00, 
         0x1C, 0x46, 0x40, 0x00, 
@@ -189,59 +196,41 @@ void message(void *buf)
     udp_header[4] = (udp_len >> 8) & 0xFF;
     udp_header[5] = udp_len & 0xFF;
 
-    memcpy(buf, ip_header, sizeof(ip_header));
-    memcpy(buf + sizeof(ip_header), udp_header, sizeof(udp_header));
-    memcpy(buf + sizeof(ip_header) + sizeof(udp_header), payload, payload_len);
+    size_t size = sizeof(ip_header) + sizeof(udp_header) + payload_len;
+    if(size > (HPT_BUFFER_SIZE - sizeof(hpt_data_info_t)))
+    {
+        printf("Too big a packet for write\n");
+        data_info->in_use = 0;
+        return -1;
+    }
 
-    //buf->capacity = HPT_NUM_BUFFERS;
-    //buf->len = HPT_BUFFER_SIZE;
+    memcpy(data, ip_header, sizeof(ip_header));
+    memcpy(data + sizeof(ip_header), udp_header, sizeof(udp_header));
+    memcpy(data + sizeof(ip_header) + sizeof(udp_header), payload, payload_len);
+
+    data_info->size = sizeof(ip_header) + sizeof(udp_header) + payload_len;
 	buff_ind++;
+    return 0;
 }
 
-void hpt_write(struct hpt *dev, hpt_buffer_t *buf)
+int check_time(hpt_data_info_t *data_info)
 {
-    if (!dev)
-        return;
-
-    size_t end_len = dev->ring_buffer_items >> 1;
-    tx_ind = tx_ind % end_len;
-    printf("tx_ind %d\n", tx_ind);
-
-
-    dev->buffers[tx_ind].data_combined = map_buffers(fd, tx_ind);
-    if (!dev->buffers[tx_ind].data_combined) {
-        close(fd);
-        free(dev);
-        printf("error map buffer\n");
-        return;
-    }
-    printf("Buffer %d mapped at %p\n", tx_ind, dev->buffers[tx_ind].data_combined);
-    
-
-    //printf("Map %p\n", dev->mapped_buffer);
-
     struct timespec start, end;
-    uint32_t i = 1;
+    uint32_t size = 1000;
+    uint32_t i = 0;
 
-	clock_gettime(CLOCK_MONOTONIC, &start); // Start timing
-	while(i > 0)
+	clock_gettime(CLOCK_MONOTONIC, &start);
+    
+	while(i++ < size)
 	{
-        message(dev->buffers[tx_ind].data_combined);
-		i--;
+        if(message(data_info)) return -1;
 	}
     ioctl(fd, HPT_IOCTL_NOTIFY, NULL);
 
-	//ioctl(fd, HPT_IOCTL_NOTIFY, NULL);
-	clock_gettime(CLOCK_MONOTONIC, &end);   // End timing
+	clock_gettime(CLOCK_MONOTONIC, &end);
 
-    for(int i = 0; i < 5; i++)
-    {
-        uint8_t *data = ((uint8_t *)dev->buffers[tx_ind].data_combined); 
-        printf("%02x ", data[i]);
-    }
-    printf("\n");
-    printf("Time taken to write to buffer: %.2f ns\n", get_time_diff(start, end));
+    uint32_t time = (uint32_t)get_time_diff(start, end);
+    printf("Time of all buffers %u ns, one buffer %u ns\n", time, time/size);
 
-    //munmap(dev->buffers[tx_ind].data_combined, HPT_BUFFER_SIZE);    
-    tx_ind++;
+    return 0;
 }

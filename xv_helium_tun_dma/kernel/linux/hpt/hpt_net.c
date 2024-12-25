@@ -42,40 +42,43 @@ static int hpt_net_config(struct net_device *dev, struct ifmap *map)
  */
 static int hpt_net_tx(struct sk_buff *skb, struct net_device *dev)
 {
-	struct hpt_dev *hpt = hpt_device;
-	if(!hpt)
+	if(!dev)
 	{
 		pr_err("hpt is null\n");
 		return NETDEV_TX_OK;
 	}
-	
-	size_t start = (hpt->ring_buffer_items >> 1);
-	static size_t rx_ind = 0;
-	rx_ind = (rx_ind % start) + start;
 
-	pr_info("rx_ind %zu\n", rx_ind);
+	size_t start = hpt_device->ring_buffer_items >> 1;
+	size_t end = hpt_device->ring_buffer_items;
 
-
-	//if(!hpt->buffers[i].data_combined || !atomic_read(&hpt->buffers[i].in_use));
-
-	size_t size = (skb->len > HPT_BUFFER_SIZE) ? HPT_BUFFER_SIZE : skb->len;
-
-	memcpy(hpt->buffers[rx_ind].data_combined, skb->data, size);
-	dev_kfree_skb(skb);
-	rx_ind++;
-
-	//uint8_t data[HPT_BUFFER_SIZE];
-	//memcpy(data, skb->data, skb->len);
-
-	//memcpy(hpt->buffers[5].data_combined, skb->data, skb->len);
-
-	/*uint8_t *cb = (uint8_t *)hpt->buffers[5].data_combined;
-	for(int i = 0; i < 50; i++)
+	for(int i = start; i < end; i++)
     {
-        pr_info("data %02x, data_combined %02x", data[i], cb[i]);
-    }*/
+    	struct hpt_dma_buffer *buffer = &hpt_device->buffers[i];
+        hpt_data_info_t *data_info = (hpt_data_info_t *)buffer->data_combined;
+        uint8_t *data = (uint8_t *)data_info + sizeof(hpt_data_info_t);
 
-	//dev_kfree_skb(skb);
+        if(ACQUIRE(&data_info->in_use)) continue;
+
+		if(skb->len > HPT_BUFFER_SIZE - sizeof(hpt_data_info_t))
+		{
+			pr_err("Too big a packet for write\n");
+			goto drop;
+		}
+
+		memcpy(data, skb->data, skb->len);
+		STORE(&data_info->in_use, 1);
+		data_info->size = skb->len;
+
+		dev_kfree_skb(skb);
+		
+		break;
+    }
+
+	return NETDEV_TX_OK;
+
+drop:
+	/* Free skb and update statistics */
+	dev_kfree_skb(skb);
 
 	return NETDEV_TX_OK;
 }
@@ -88,38 +91,46 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
     int ret;
     u8 ip_version;
 
-	size_t end = (hpt->ring_buffer_items >> 1);
+	size_t start = 0;
+	size_t end = hpt->ring_buffer_items >> 1;
 
-    for(int i = 0; i < end; i++) 
+    for(int i = start; i < end; i++) 
 	{
         struct hpt_dma_buffer *buffer = &hpt->buffers[i];
+		if(!buffer) continue;
 
-        if(!buffer || !atomic_read(&buffer->in_use)) continue;
+		hpt_data_info_t *data_info = (hpt_data_info_t *)buffer->data_combined;
+        //if(!buffer || !atomic_read(&buffer->in_use)) continue;
 
-		uint8_t *data = (uint8_t *)buffer->data_combined;
-		pr_info("Buf %02x, %02x, %02x, %02x\n", data[0], data[1], data[2], data[3]);
+        if(!ACQUIRE(&data_info->in_use)) continue;
+
+		uint8_t *data = (uint8_t *)data_info + sizeof(hpt_data_info_t);
+		//pr_info("Buf %02x, %02x, %02x, %02x\n", data[0], data[1], data[2], data[3]);
 
 		size_t len = ((uint16_t)data[2] << 8) | data[3];
-		pr_info("The index %d, len %zu\n", i, len);
+		//pr_info("The index %d, len %zu\n", i, len);
 
 		if(unlikely(len == 0 || len > HPT_BUFFER_SIZE)) {
 		    dev->stats.rx_dropped++;
-			atomic_set(&buffer->in_use, 0);
+			//atomic_set(&buffer->in_use, 0);
+			STORE(&data_info->in_use, 0);
         	continue;
         }
-		pr_info("The packet length is %zu\n", len);
+		//pr_info("The packet length is %zu\n", len);
 
         skb = netdev_alloc_skb(dev, len);
         if(unlikely(!skb)) {
             dev->stats.rx_dropped++;
-        	atomic_set(&buffer->in_use, 0);
+        	//atomic_set(&buffer->in_use, 0);
+			STORE(&data_info->in_use, 0);
 			pr_err("Could not allocate memory to transmit a packet\n");
         	continue;
         }
 
         // Copy the decrypted data into the SKB
-        memcpy(skb_put(skb, len), buffer->data_combined, len);
-        atomic_set(&buffer->in_use, 0);
+        memcpy(skb_put(skb, len), data, len);
+        //atomic_set(&buffer->in_use, 0);
+		STORE(&data_info->in_use, 0);
 
         // Check the IP version (from the start of the buffer)
         ip_version = skb->len ? (skb->data[0] >> 4) : 0;
@@ -140,7 +151,7 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
 
         // Send the SKB to the network stack
         ret = netif_rx(skb);
-		pr_info("The packet send\n");
+		//pr_info("The packet send\n");
 
         // Update statistics
         dev->stats.rx_bytes += len;

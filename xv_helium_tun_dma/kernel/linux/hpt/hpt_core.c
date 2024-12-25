@@ -134,16 +134,18 @@ static int hpt_allocate_buffers(struct hpt_dev *hpt)
 
     for (int i = 0; i < hpt->ring_buffer_items; i++) 
 	{
-		hpt->buffers[i].data_combined = dma_alloc_coherent(&hpt->pdev->dev,
+		struct hpt_dma_buffer *buffer = &hpt->buffers[i];
+		buffer->data_combined = dma_alloc_coherent(&hpt->pdev->dev,
                                                  HPT_BUFFER_SIZE,
-                                                 &hpt->buffers[i].dma_handle,
+                                                 &buffer->dma_handle,
                                                  GFP_KERNEL);
 
-		if (!hpt->buffers[i].data_combined) {
+		if (!buffer->data_combined) {
 			pr_err("Failed to allocate combined buffer %d\n", i);
 			return -ENOMEM;
 		}
-		atomic_set(&hpt->buffers[i].in_use, 0);
+		hpt_data_info_t *data_info = (hpt_data_info_t *)buffer->data_combined;
+		STORE(&data_info->in_use, 0);
 	}
 
 	return 0;
@@ -152,13 +154,16 @@ static int hpt_allocate_buffers(struct hpt_dev *hpt)
 static void hpt_free_buffers(struct hpt_dev *hpt)
 {
 	int i;
-	for (i = 0; i < hpt->ring_buffer_items; i++) {
-		if (hpt->buffers[i].data_combined) {
-			dma_free_coherent(hpt_device->device, 
+	for (i = 0; i < hpt->ring_buffer_items; i++) 
+	{
+		struct hpt_dma_buffer *buffer = &hpt->buffers[i];
+
+		if (buffer->data_combined) 
+		{
+			dma_free_coherent(hpt->device, 
 								HPT_BUFFER_SIZE,
-                      			hpt_device->buffers[i].data_combined, 
-					  			hpt_device->buffers[i].dma_handle);
-			atomic_set(&hpt->buffers[i].in_use, 0);
+                      			buffer->data_combined, 
+					  			buffer->dma_handle);
    		}
 	}
 }
@@ -167,21 +172,27 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
 {
     struct hpt_dev *dev = file->private_data;
 	int buffer_idx = vma->vm_pgoff;
-    unsigned long pfn = dev->buffers[buffer_idx].dma_handle >> PAGE_SHIFT;
+	struct hpt_dma_buffer *buffer = &dev->buffers[buffer_idx];
+    unsigned long pfn = buffer->dma_handle >> PAGE_SHIFT;
 
-    if (buffer_idx >= HPT_BUFFER_COUNT) {
+    if (buffer_idx >= HPT_BUFFER_COUNT) 
+	{
         pr_err("Invalid buffer index: %d\n", buffer_idx);
         return -EINVAL;
     }
 
     // Validate the buffer
-    if (!dev->buffers[buffer_idx].data_combined) {
+    if (!buffer->data_combined) 
+	{
         pr_err("Combined buffer not allocated for index %d\n", buffer_idx);
         return -EINVAL;
     }
 
-    // Check if the buffer is already in use
-    if (atomic_read(&dev->buffers[buffer_idx].in_use)) {
+	hpt_data_info_t *data_info = (hpt_data_info_t *)buffer->data_combined;
+
+	// Check if the buffer is already in use
+	if(ACQUIRE(&data_info->in_use))
+	{
         pr_err("Buffer %d is already in use\n", buffer_idx);
         return -EBUSY;
     }
@@ -191,8 +202,7 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
         return -EAGAIN;
 
 	// Mark the buffer as in use
-    atomic_set(&dev->buffers[buffer_idx].in_use, 1);
-    pr_info("Mapped combined buffer for index %d, addr %p\n", buffer_idx, dev->buffers[buffer_idx].data_combined);
+    pr_info("Mapped combined buffer for index %d, addr %p\n", buffer_idx, buffer->data_combined);
 
     return 0;
 }
@@ -230,7 +240,7 @@ static int hpt_ioctl_create(struct file *file, struct net *net,
 			       hpt_net_init);
 	if (net_dev == NULL) {
 		pr_err("error allocating device \"%s\"\n", net_dev_info.name);
-		return -EBUSY;
+        return -EBUSY;
 	}
 
 	dev_net_set(net_dev, net);
@@ -243,6 +253,12 @@ static int hpt_ioctl_create(struct file *file, struct net *net,
 	pr_info("Set net_dev\n");
 
 	strncpy(hpt->name, net_dev_info.name, HPT_NAMESIZE);
+
+	if(net_dev_info.ring_buffer_items >= HPT_BUFFER_COUNT)
+	{
+		pr_err("Does not have enough space %zu\n", net_dev_info.ring_buffer_items);
+		goto clean_up;
+	}
 	hpt->ring_buffer_items = net_dev_info.ring_buffer_items;
 	pr_info("Copied name %s and size %zu\n", hpt->name, hpt->ring_buffer_items);
 
