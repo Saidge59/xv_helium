@@ -132,12 +132,11 @@ static int hpt_allocate_buffers(struct hpt_dev *hpt)
         return -EINVAL;
     }
 
-    int i;
-    for (i = 0; i < hpt->ring_buffer_items; i++) 
+    for (int i = 0; i < hpt->ring_buffer_items; i++) 
 	{
 		hpt->buffers[i].data_combined = dma_alloc_coherent(&hpt->pdev->dev,
                                                  HPT_BUFFER_SIZE,
-                                                 &hpt->dma_handle,
+                                                 &hpt->buffers[i].dma_handle,
                                                  GFP_KERNEL);
 
 		if (!hpt->buffers[i].data_combined) {
@@ -158,7 +157,7 @@ static void hpt_free_buffers(struct hpt_dev *hpt)
 			dma_free_coherent(hpt_device->device, 
 								HPT_BUFFER_SIZE,
                       			hpt_device->buffers[i].data_combined, 
-					  			hpt_device->dma_handle);
+					  			hpt_device->buffers[i].dma_handle);
 			atomic_set(&hpt->buffers[i].in_use, 0);
    		}
 	}
@@ -167,9 +166,9 @@ static void hpt_free_buffers(struct hpt_dev *hpt)
 static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
 {
     struct hpt_dev *dev = file->private_data;
-    unsigned long pfn = dev->dma_handle >> PAGE_SHIFT;
-    int buffer_idx = vma->vm_pgoff;
-	
+	int buffer_idx = vma->vm_pgoff;
+    unsigned long pfn = dev->buffers[buffer_idx].dma_handle >> PAGE_SHIFT;
+
     if (buffer_idx >= HPT_BUFFER_COUNT) {
         pr_err("Invalid buffer index: %d\n", buffer_idx);
         return -EINVAL;

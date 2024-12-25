@@ -102,8 +102,22 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t num_ring_items)
     }
 */
     dev->ring_buffer_items = num_ring_items;
-    printf("Mapped buffer\n");
 
+    size_t start_len = num_ring_items >> 1;
+
+    for(int i = start_len; i < num_ring_items; i++)
+    {
+        dev->buffers[i].data_combined = map_buffers(fd, i);
+        if (!dev->buffers[i].data_combined) {
+            close(fd);
+            free(dev);
+            printf("error map buffer\n");
+            return NULL;
+        }
+        
+    }
+
+    printf("Mapped buffer\n");
     // Setup ring buffer control structure
     //hpt->ring_tx = (struct ring_buffer *)hpt->mapped_buffer;
     //hpt->ring_rx = (struct ring_buffer *)hpt->mapped_buffer + (HPT_ALLOC_SIZE / sizeof(struct ring_buffer));
@@ -129,22 +143,20 @@ void hpt_read(struct hpt *dev, hpt_buffer_t *buf)
 
     size_t start_len = dev->ring_buffer_items >> 1;
     rx_ind = (rx_ind % start_len) + start_len;
+    printf("rx_ind %d\n", rx_ind);
 
-    buf->base = map_buffers(fd, rx_ind++);
-    if (!buf->base) {
-        close(fd);
-        free(dev);
-        printf("error map buffer\n");
-        return;
-    }
-    printf("Map %p\n", dev->buffers);
+    //memcpy(buf->base, dev->buffers[rx_ind].data_combined, HPT_BUFFER_SIZE);
+
+    char *data = dev->buffers[rx_ind].data_combined;
+    printf("in_use %d\n", dev->buffers[rx_ind].in_use);
 
     for(int i = 0; i < HPT_BUFFER_SIZE; i++)
     {
-        printf("%c", buf->base[i]);
+        printf("%c", data[i]);
     }
 
-	munmap(buf->base, HPT_BUFFER_SIZE);    
+	//munmap(dev->buffers[rx_ind].data_combined, HPT_BUFFER_SIZE);  
+    rx_ind++;  
 }
 
 void message(void *buf)
@@ -230,6 +242,6 @@ void hpt_write(struct hpt *dev, hpt_buffer_t *buf)
     printf("\n");
     printf("Time taken to write to buffer: %.2f ns\n", get_time_diff(start, end));
 
-    munmap(dev->buffers[tx_ind].data_combined, HPT_BUFFER_SIZE);    
+    //munmap(dev->buffers[tx_ind].data_combined, HPT_BUFFER_SIZE);    
     tx_ind++;
 }

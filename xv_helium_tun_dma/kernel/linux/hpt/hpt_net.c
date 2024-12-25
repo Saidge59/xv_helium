@@ -50,17 +50,32 @@ static int hpt_net_tx(struct sk_buff *skb, struct net_device *dev)
 	}
 	
 	size_t start = (hpt->ring_buffer_items >> 1);
-	pr_info("start %zu\n", start);
+	static size_t rx_ind = 0;
+	rx_ind = (rx_ind % start) + start;
 
-	for(int i = start; i < hpt->ring_buffer_items; i++) 
-	{
-		struct hpt_dma_buffer *buffer = &hpt->buffers[i];
-		if(!buffer || !atomic_read(&buffer->in_use)) continue;
+	pr_info("rx_ind %zu\n", rx_ind);
 
-		memcpy(buffer->data_combined, skb->data, skb->len);
-	
-		dev_kfree_skb(skb);
-	}
+
+	//if(!hpt->buffers[i].data_combined || !atomic_read(&hpt->buffers[i].in_use));
+
+	size_t size = (skb->len > HPT_BUFFER_SIZE) ? HPT_BUFFER_SIZE : skb->len;
+
+	memcpy(hpt->buffers[rx_ind].data_combined, skb->data, size);
+	dev_kfree_skb(skb);
+	rx_ind++;
+
+	//uint8_t data[HPT_BUFFER_SIZE];
+	//memcpy(data, skb->data, skb->len);
+
+	//memcpy(hpt->buffers[5].data_combined, skb->data, skb->len);
+
+	/*uint8_t *cb = (uint8_t *)hpt->buffers[5].data_combined;
+	for(int i = 0; i < 50; i++)
+    {
+        pr_info("data %02x, data_combined %02x", data[i], cb[i]);
+    }*/
+
+	//dev_kfree_skb(skb);
 
 	return NETDEV_TX_OK;
 }

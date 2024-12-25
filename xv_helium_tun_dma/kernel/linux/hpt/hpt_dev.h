@@ -49,6 +49,7 @@ struct hpt_net_device_info {
 struct hpt_dma_buffer {
 	void *data_combined;              
     atomic_t in_use;
+	dma_addr_t dma_handle;
 };
 
 struct hpt_dev {
@@ -60,7 +61,6 @@ struct hpt_dev {
     dev_t devt;
     struct hpt_dma_buffer buffers[HPT_BUFFER_COUNT]; // Buffer pool
     struct platform_device *pdev;
-    dma_addr_t dma_handle;
     struct mutex lock;
 	struct task_struct *pthread;
 	struct net_device *net_dev;
