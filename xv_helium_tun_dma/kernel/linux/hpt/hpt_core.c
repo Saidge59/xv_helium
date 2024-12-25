@@ -31,10 +31,10 @@ static int hpt_kernel_thread(void *param)
 
 	while (!kthread_should_stop()) {
 		wait_event_interruptible(dev->read_wait_queue, dev->event_flag);
-		//spin_lock(&dev->buffer_lock);
+		spin_lock(&dev->buffer_lock);
 		dev->event_flag = 0;
 		//STORE(&dev->event_flag, 0);
-		//spin_unlock(&dev->buffer_lock);
+		spin_unlock(&dev->buffer_lock);
 		hpt_net_rx(dev);
 	}
 
@@ -211,7 +211,10 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
         return -EAGAIN;
 
 	// Mark the buffer as in use
-    pr_info("Mapped combined buffer for index %d, addr %p\n", buffer_idx, buffer->data_combined);
+    //pr_info("Mapped combined buffer for index %d, addr %p\n", buffer_idx, buffer->data_combined);
+	STORE(&data_info->in_use, 1);
+	STORE(&data_info->ready_flag_rx, 0);
+	STORE(&data_info->ready_flag_tx, 0);
 
     return 0;
 }
@@ -328,12 +331,12 @@ static long hpt_ioctl(struct file *file, uint32_t ioctl_num,
 		rtnl_unlock();
 		break;
 	case _IOC_NR(HPT_IOCTL_NOTIFY):
-		//spin_lock(&hpt->buffer_lock);
+		spin_lock(&hpt->buffer_lock);
 		hpt->event_flag = 1;
 		//STORE(&hpt->event_flag, 1);
-		//spin_unlock(&hpt->buffer_lock);
+		spin_unlock(&hpt->buffer_lock);
 
-		//wake_up_interruptible(&hpt->read_wait_queue);
+		wake_up_interruptible(&hpt->read_wait_queue);
 		ret = 0;
 		break;
 	default:

@@ -93,8 +93,6 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t num_ring_items)
             printf("error map buffer\n");
             return NULL;
         }
-        hpt_data_info_t *data_info = (hpt_data_info_t *)dev->buffers[i].data_combined;
-        data_info->ready_flag_rx = 0;
     }
 
     printf("Allocate buffer success!\n");
@@ -125,17 +123,17 @@ void hpt_read(struct hpt *dev, hpt_buffer_t *buf)
         hpt_data_info_t *data_info = (hpt_data_info_t *)buffer->data_combined;
         uint8_t *data = (uint8_t *)data_info + sizeof(hpt_data_info_t);
 
-        if(!data_info->in_use) continue;
+        if(!data_info->in_use || !data_info->ready_flag_tx) continue;
 
         if(data_info->size > (HPT_BUFFER_SIZE - sizeof(hpt_data_info_t)))
         {
             printf("Too big a packet for write\n");
-            data_info->in_use = 0;
+            data_info->ready_flag_tx = 0;
             continue;
         }
 
         memcpy(buf->base, data, data_info->size);
-        data_info->in_use = 0;
+        data_info->ready_flag_tx = 0;
 
         for(int i = 0; i < HPT_BUFFER_SIZE; i++)
         {
@@ -157,11 +155,12 @@ void hpt_write(struct hpt *dev, hpt_buffer_t *buf)
         struct hpt_dma_buffer *buffer = &dev->buffers[i];
         hpt_data_info_t *data_info = (hpt_data_info_t *)buffer->data_combined;
 
-        if(data_info->in_use) continue;
+        if(!data_info->in_use || data_info->ready_flag_rx) continue;
 
-        if(check_time(data_info)) return;
-        data_info->in_use = 1;
+        check_time(data_info);
+        printf("ready_flag_rx %d\n", data_info->ready_flag_rx );
         data_info->ready_flag_rx = 1;
+        printf("ready_flag_rx %d\n", data_info->ready_flag_rx );
 
         break;
     }
@@ -203,7 +202,7 @@ int message(hpt_data_info_t *data_info)
     if(size > (HPT_BUFFER_SIZE - sizeof(hpt_data_info_t)))
     {
         printf("Too big a packet for write\n");
-        data_info->in_use = 0;
+        data_info->ready_flag_rx = 0;
         return -1;
     }
 
@@ -219,17 +218,16 @@ int message(hpt_data_info_t *data_info)
 int check_time(hpt_data_info_t *data_info)
 {
     struct timespec start, end;
-    uint32_t size = 1000;
+    uint32_t size = 1;
     uint32_t i = 0;
 
 	clock_gettime(CLOCK_MONOTONIC, &start);
     
 	while(i++ < size)
 	{
-        if(message(data_info)) return -1;
-        //ioctl(fd, HPT_IOCTL_NOTIFY, NULL);
+        message(data_info);
 	}
-
+    ioctl(fd, HPT_IOCTL_NOTIFY, NULL);
 	clock_gettime(CLOCK_MONOTONIC, &end);
 
     uint32_t time = (uint32_t)get_time_diff(start, end);

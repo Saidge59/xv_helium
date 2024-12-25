@@ -57,7 +57,7 @@ static int hpt_net_tx(struct sk_buff *skb, struct net_device *dev)
         hpt_data_info_t *data_info = (hpt_data_info_t *)buffer->data_combined;
         uint8_t *data = (uint8_t *)data_info + sizeof(hpt_data_info_t);
 
-        if(ACQUIRE(&data_info->in_use)) continue;
+        if(!ACQUIRE(&data_info->in_use) || ACQUIRE(&data_info->ready_flag_tx)) continue;
 
 		if(skb->len > HPT_BUFFER_SIZE - sizeof(hpt_data_info_t))
 		{
@@ -66,7 +66,7 @@ static int hpt_net_tx(struct sk_buff *skb, struct net_device *dev)
 		}
 
 		memcpy(data, skb->data, skb->len);
-		STORE(&data_info->in_use, 1);
+		STORE(&data_info->ready_flag_tx, 1);
 		data_info->size = skb->len;
 
 		dev_kfree_skb(skb);
@@ -94,43 +94,38 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
 	size_t start = 0;
 	size_t end = hpt->ring_buffer_items >> 1;
 
-    for(int i = start; i < end; i++) 
+    for(int i = start; i < 5; i++) 
 	{
         struct hpt_dma_buffer *buffer = &hpt->buffers[i];
 		if(!buffer) continue;
 
 		hpt_data_info_t *data_info = (hpt_data_info_t *)buffer->data_combined;
-        //if(!buffer || !atomic_read(&buffer->in_use)) continue;
-
+pr_info("rx_flag %d\n", ACQUIRE(&data_info->ready_flag_rx));
         if(!ACQUIRE(&data_info->in_use) || !ACQUIRE(&data_info->ready_flag_rx)) continue;
 
 		uint8_t *data = (uint8_t *)data_info + sizeof(hpt_data_info_t);
-		//pr_info("Buf %02x, %02x, %02x, %02x\n", data[0], data[1], data[2], data[3]);
+		pr_info("Buf %02x, %02x, %02x, %02x, %02x\n", data[0], data[1], data[2], data[3], data[50]);
 
 		size_t len = ((uint16_t)data[2] << 8) | data[3];
 		//pr_info("The index %d, len %zu\n", i, len);
 
 		if(unlikely(len == 0 || len > HPT_BUFFER_SIZE)) {
 		    dev->stats.rx_dropped++;
-			//atomic_set(&buffer->in_use, 0);
-			STORE(&data_info->in_use, 0);
+			STORE(&data_info->ready_flag_rx, 0);
         	continue;
         }
-		//pr_info("The packet length is %zu\n", len);
+		pr_info("The packet length is %zu\n", len);
 
         skb = netdev_alloc_skb(dev, len);
         if(unlikely(!skb)) {
             dev->stats.rx_dropped++;
-        	//atomic_set(&buffer->in_use, 0);
-			STORE(&data_info->in_use, 0);
+			STORE(&data_info->ready_flag_rx, 0);
 			pr_err("Could not allocate memory to transmit a packet\n");
         	continue;
         }
 
         // Copy the decrypted data into the SKB
         memcpy(skb_put(skb, len), data, len);
-        //atomic_set(&buffer->in_use, 0);
-		STORE(&data_info->in_use, 0);
 		STORE(&data_info->ready_flag_rx, 0);
 
         // Check the IP version (from the start of the buffer)
@@ -152,7 +147,7 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
 
         // Send the SKB to the network stack
         ret = netif_rx(skb);
-		//pr_info("The packet send\n");
+		pr_info("The packet send\n");
 
         // Update statistics
         dev->stats.rx_bytes += len;

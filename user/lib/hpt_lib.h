@@ -17,7 +17,7 @@ struct hpt_net_device_info {
 
 typedef struct hpt_data_info {
   int in_use;
-	size_t size;
+	int size;
 	int ready_flag_rx;
 	int ready_flag_tx;
 }hpt_data_info_t;
