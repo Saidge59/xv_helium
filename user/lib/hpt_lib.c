@@ -123,6 +123,11 @@ void hpt_read(struct hpt *dev, hpt_buffer_t *buf)
         hpt_data_info_t *data_info = (hpt_data_info_t *)buffer->data_combined;
         uint8_t *data = (uint8_t *)data_info + sizeof(hpt_data_info_t);
 
+        if(i == end-1)
+        {
+            printf("tx_buffer is empty\n");
+        }
+
         if(!data_info->in_use || !data_info->ready_flag_tx) continue;
 
         if(data_info->size > (HPT_BUFFER_SIZE - sizeof(hpt_data_info_t)))
@@ -132,13 +137,14 @@ void hpt_read(struct hpt *dev, hpt_buffer_t *buf)
             continue;
         }
 
-        memcpy(buf->base, data, data_info->size);
-        data_info->ready_flag_tx = 0;
+        //memcpy(buf->base, data, data_info->size);
 
-        for(int i = 0; i < HPT_BUFFER_SIZE; i++)
+        for(int i = 0; i < data_info->size; i++)
         {
-            printf("%c", ((char *)buf->base)[i]);
+            printf("%c", ((char *)data)[i]);
         }
+         data_info->ready_flag_tx = 0;
+
         printf("\n=========================\n");
     }
 }
@@ -158,9 +164,7 @@ void hpt_write(struct hpt *dev, hpt_buffer_t *buf)
         if(!data_info->in_use || data_info->ready_flag_rx) continue;
 
         check_time(data_info);
-        printf("ready_flag_rx %d\n", data_info->ready_flag_rx );
         data_info->ready_flag_rx = 1;
-        printf("ready_flag_rx %d\n", data_info->ready_flag_rx );
 
         break;
     }
@@ -218,7 +222,7 @@ int message(hpt_data_info_t *data_info)
 int check_time(hpt_data_info_t *data_info)
 {
     struct timespec start, end;
-    uint32_t size = 1;
+    uint32_t size = 1000;
     uint32_t i = 0;
 
 	clock_gettime(CLOCK_MONOTONIC, &start);
@@ -227,7 +231,7 @@ int check_time(hpt_data_info_t *data_info)
 	{
         message(data_info);
 	}
-    ioctl(fd, HPT_IOCTL_NOTIFY, NULL);
+    //ioctl(fd, HPT_IOCTL_NOTIFY, NULL);
 	clock_gettime(CLOCK_MONOTONIC, &end);
 
     uint32_t time = (uint32_t)get_time_diff(start, end);

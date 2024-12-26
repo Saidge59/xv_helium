@@ -29,23 +29,23 @@ static int hpt_kernel_thread(void *param)
 	pr_info("Kernel RX thread started!\n");
 	struct hpt_dev *dev = param;
 
-	while (!kthread_should_stop()) {
+	/*while (!kthread_should_stop()) {
 		wait_event_interruptible(dev->read_wait_queue, dev->event_flag);
 		spin_lock(&dev->buffer_lock);
 		dev->event_flag = 0;
 		//STORE(&dev->event_flag, 0);
 		spin_unlock(&dev->buffer_lock);
 		hpt_net_rx(dev);
-	}
+	}*/
 
-/*
+
 	while (!kthread_should_stop()) 
 	{
-		//hpt_net_rx(dev);
+		hpt_net_rx(dev);
 		cpu_relax();
-		ndelay(1000);
+		//ndelay(1000);
     }
-*/
+
 	pr_info("Kernel RX thread stopped!\n");
 	return 0;
 }
@@ -289,20 +289,21 @@ static int hpt_ioctl_create(struct file *file, struct net *net,
 	//Initialise the reader thread 
 	init_waitqueue_head(&hpt->read_wait_queue);
 
-	ret = hpt_run_thread(hpt);
-	if (ret != 0) {
-		pr_err("Couldn't start rx kernel thread: %i\n", ret);
-		unregister_netdevice(net_dev);
-		goto clean_up;
-	}
-
 	net_dev->needs_free_netdev = true;
 
 	ret = hpt_allocate_buffers(hpt);
 	if (ret != 0) {
 		pr_err("Failed to allocate DMA buffer\n");
         ret = -ENOMEM;
+		unregister_netdevice(net_dev);
         goto clean_up;
+	}
+
+	ret = hpt_run_thread(hpt);
+	if (ret != 0) {
+		pr_err("Couldn't start rx kernel thread: %i\n", ret);
+		unregister_netdevice(net_dev);
+		goto clean_up;
 	}
 
 	pr_info("HPT: Complete");
@@ -451,7 +452,7 @@ static void __exit hpt_exit(void)
     class_destroy(hpt_device->class);
     cdev_del(&hpt_device->cdev);
     unregister_chrdev_region(hpt_device->devt, 1);
-    //kfree(hpt_device);
+    kfree(hpt_device);
 	pr_info("Exit HPT!\n");
 }
 

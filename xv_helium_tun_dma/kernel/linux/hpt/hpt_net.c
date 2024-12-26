@@ -94,13 +94,13 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
 	size_t start = 0;
 	size_t end = hpt->ring_buffer_items >> 1;
 
-    for(int i = start; i < 5; i++) 
+    for(int i = start; i < end; i++) 
 	{
         struct hpt_dma_buffer *buffer = &hpt->buffers[i];
-		if(!buffer) continue;
+		if(!buffer || !buffer->data_combined) continue;
 
 		hpt_data_info_t *data_info = (hpt_data_info_t *)buffer->data_combined;
-pr_info("rx_flag %d\n", ACQUIRE(&data_info->ready_flag_rx));
+
         if(!ACQUIRE(&data_info->in_use) || !ACQUIRE(&data_info->ready_flag_rx)) continue;
 
 		uint8_t *data = (uint8_t *)data_info + sizeof(hpt_data_info_t);
