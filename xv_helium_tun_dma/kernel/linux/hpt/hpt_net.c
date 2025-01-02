@@ -1,13 +1,58 @@
 #include "hpt_dev.h"
 
+/*
+ * Opens the network device, starting the transmission queue and carrier.
+ */
+static int hpt_net_open(struct net_device *dev);
+
+/*
+ * Releases the network device, stopping the transmission queue and carrier.
+ */
+static int hpt_net_release(struct net_device *dev);
+
+/*
+ * Handles configuration changes for the network device.
+ */
+static int hpt_net_config(struct net_device *dev, struct ifmap *map);
+
+/*
+ * Transmits a packet to the network. Copies data to the ring buffer.
+ */
+static int hpt_net_tx(struct sk_buff *skb, struct net_device *dev);
+
+/*
+ * Rejects changes to the MTU size.
+ */
+static int hpt_net_change_mtu(struct net_device *dev, int new_mtu);
+
+/*
+ * Placeholder for changing RX flags.
+ */
+static void hpt_net_change_rx_flags(struct net_device *netdev, int flags);
+
+/*
+ * Dummy header handler for point-to-point interfaces.
+ */
+static int hpt_net_header(struct sk_buff *skb, struct net_device *dev,
+                          unsigned short type, const void *daddr,
+                          const void *saddr, uint32_t len);
+
+/*
+ * Changes the link carrier state (up or down).
+ */
+static int hpt_net_change_carrier(struct net_device *dev, bool new_carrier);
+
+/*
+ * Retrieves driver information for ethtool.
+ */
+static void hpt_get_drvinfo(struct net_device *dev, struct ethtool_drvinfo *info);
+
+
 #define WD_TIMEOUT 5 /*jiffies */
 #define HPT_WAIT_RESPONSE_TIMEOUT 300 /* 3 seconds */
 
 struct hpt_dev *hpt_device;
 
-/*
- * Open and close
- */
 static int hpt_net_open(struct net_device *dev)
 {
 	netif_start_queue(dev);
@@ -23,9 +68,6 @@ static int hpt_net_release(struct net_device *dev)
 	return 0;
 }
 
-/*
- * Configuration changes (passed on by ifconfig)
- */
 static int hpt_net_config(struct net_device *dev, struct ifmap *map)
 {
 	/* can't act on a running interface */
@@ -37,9 +79,6 @@ static int hpt_net_config(struct net_device *dev, struct ifmap *map)
 	return 0;
 }
 
-/*
- * Transmit a packet (called by the kernel)
- */
 static int hpt_net_tx(struct sk_buff *skb, struct net_device *dev)
 {
 	if(!dev)
@@ -77,7 +116,6 @@ static int hpt_net_tx(struct sk_buff *skb, struct net_device *dev)
 	return NETDEV_TX_OK;
 
 drop:
-	/* Free skb and update statistics */
 	dev_kfree_skb(skb);
 
 	return NETDEV_TX_OK;
@@ -104,7 +142,7 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
         if(!ACQUIRE(&data_info->in_use) || !ACQUIRE(&data_info->ready_flag_rx)) continue;
 
 		uint8_t *data = (uint8_t *)data_info + sizeof(hpt_data_info_t);
-		pr_info("Buf %02x, %02x, %02x, %02x, %02x\n", data[0], data[1], data[2], data[3], data[50]);
+		//pr_info("Buf %02x, %02x, %02x, %02x, %02x\n", data[0], data[1], data[2], data[3], data[50]);
 
 		size_t len = ((uint16_t)data[2] << 8) | data[3];
 		//pr_info("The index %d, len %zu\n", i, len);
@@ -114,7 +152,7 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
 			STORE(&data_info->ready_flag_rx, 0);
         	continue;
         }
-		pr_info("The packet length is %zu\n", len);
+		//pr_info("The packet length is %zu\n", len);
 
         skb = netdev_alloc_skb(dev, len);
         if(unlikely(!skb)) {
@@ -147,7 +185,7 @@ size_t hpt_net_rx(struct hpt_dev *hpt)
 
         // Send the SKB to the network stack
         ret = netif_rx(skb);
-		pr_info("The packet send\n");
+		//pr_info("The packet send\n");
 
         // Update statistics
         dev->stats.rx_bytes += len;
@@ -180,10 +218,6 @@ static void hpt_net_change_rx_flags(struct net_device *netdev, int flags)
 	return;
 }
 
-/**
- * Point to point interfaces don't need to strip headers
- * so we leave this function empty.
- */
 static int hpt_net_header(struct sk_buff *skb, struct net_device *dev,
 			  unsigned short type, const void *daddr,
 			  const void *saddr, uint32_t len)
@@ -191,9 +225,6 @@ static int hpt_net_header(struct sk_buff *skb, struct net_device *dev,
 	return 0;
 }
 
-/**
- * Change the link carrier state from up to down by ip link set dev ... up
- */
 static int hpt_net_change_carrier(struct net_device *dev, bool new_carrier)
 {
 	if (new_carrier) {

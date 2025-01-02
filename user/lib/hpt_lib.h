@@ -53,13 +53,25 @@ typedef struct hpt_buffer {
 
 hpt_buffer_t* hpt_get_tx_buffer();
 
+
+// Returns the file descriptor of the HPT device.
+int hpt_fd(struct hpt *dev);
+
+// Initializes the HPT device and opens the file descriptor.
 int hpt_init();
+
+// Allocates and configures the HPT device structure and buffers.
 struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t num_ring_items);
+
+// Closes the HPT device and frees allocated resources.
 void hpt_close(struct hpt *dev);
-void hpt_write(struct hpt *dev, hpt_buffer_t *buf);
+
+// Reads data from the HPT device buffers.
 void hpt_read(struct hpt *dev, hpt_buffer_t *buf);
-int message(hpt_data_info_t *data_info);
-int check_time(hpt_data_info_t *data_info);
+
+// Writes data to the HPT device buffers.
+void hpt_write(struct hpt *dev, hpt_buffer_t *buf);
+
 
 #define HPT_IOCTL_CREATE _IOWR(0x92, 1, struct hpt_net_device_info)
 

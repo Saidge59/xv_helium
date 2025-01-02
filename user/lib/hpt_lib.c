@@ -12,12 +12,21 @@
 #include "hpt_lib.h"
 #include <time.h>
 
+// Calculates the time difference between two timestamps in nanoseconds.
+static inline double get_time_diff(struct timespec start, struct timespec end);
+
+// Constructs and writes a message with IP and UDP headers into the buffer.
+static int message(hpt_data_info_t *data_info);
+
+// Measures the execution time for writing messages to buffers.
+static int check_time(hpt_data_info_t *data_info);
+
+// Maps device memory buffers using mmap.
+static void *map_buffers(int fd, int buffer_idx);
+
+
 uint8_t buff_ind;
 int fd;
-
-static inline double get_time_diff(struct timespec start, struct timespec end) {
-    return(end.tv_sec - start.tv_sec) * 1e9 + (end.tv_nsec - start.tv_nsec);
-}
 
 int hpt_fd(struct hpt *dev)
 {
@@ -37,7 +46,7 @@ int hpt_init()
     return 0;
 }
 
-void *map_buffers(int fd, int buffer_idx) {
+static void *map_buffers(int fd, int buffer_idx) {
     void *mapped;
 	
     size_t page_size = sysconf(_SC_PAGE_SIZE);
@@ -169,7 +178,7 @@ void hpt_write(struct hpt *dev, hpt_buffer_t *buf)
     }
 }
 
-int message(hpt_data_info_t *data_info)
+static int message(hpt_data_info_t *data_info)
 {
     uint8_t *data = (uint8_t *)data_info + sizeof(hpt_data_info_t);
 
@@ -218,7 +227,11 @@ int message(hpt_data_info_t *data_info)
     return 0;
 }
 
-int check_time(hpt_data_info_t *data_info)
+static inline double get_time_diff(struct timespec start, struct timespec end) {
+    return(end.tv_sec - start.tv_sec) * 1e9 + (end.tv_nsec - start.tv_nsec);
+}
+
+static int check_time(hpt_data_info_t *data_info)
 {
     struct timespec start, end;
     uint32_t size = 1;

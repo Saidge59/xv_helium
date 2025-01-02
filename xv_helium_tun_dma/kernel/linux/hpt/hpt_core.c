@@ -3,26 +3,140 @@
 #include <linux/dma-mapping.h>
 #include <linux/page-flags.h>
 #include <linux/gfp.h>
-
-
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/fs.h>
 #include <linux/dma-mapping.h>
 #include <linux/mutex.h>
-#include <linux/platform_device.h>  // Add this
+#include <linux/platform_device.h> 
 
 MODULE_VERSION(HPT_VERSION);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Blake Loring");
 MODULE_DESCRIPTION("High Performance TUN device");
 
-struct hpt_mod_info hmi;
+/**
+ * hpt_kernel_thread - Kernel thread function for receiving packets.
+ * @param: Pointer to the hpt_dev structure.
+ *
+ * Continuously calls hpt_net_rx() to handle packet reception until
+ * the thread is stopped. This function represents the main loop of
+ * the kernel thread.
+ */
+static int hpt_kernel_thread(void *param);
 
-//static struct device core_dev;
-extern struct hpt_dev *hpt_device;
+/**
+ * hpt_capable - Check for NET_ADMIN capability.
+ *
+ * Returns true if the current process has CAP_NET_ADMIN capability,
+ * otherwise false.
+ */
+static inline bool hpt_capable(void);
+
+/**
+ * hpt_run_thread - Start the kernel thread for packet processing.
+ * @hpt: Pointer to the hpt_dev structure.
+ *
+ * Creates and starts a kernel thread for receiving packets and handling
+ * them in the kernel space. Returns 0 on success or a negative error
+ * code on failure.
+ */
+static int hpt_run_thread(struct hpt_dev *hpt);
+
+/**
+ * hpt_open - Handle open() system call for the HPT device.
+ * @inode: Pointer to the inode structure.
+ * @file: Pointer to the file structure.
+ *
+ * Prepares the device for use by ensuring proper security capabilities
+ * and setting private data. Returns 0 on success or a negative error
+ * code on failure.
+ */
+static int hpt_open(struct inode *inode, struct file *file);
+
+/**
+ * hpt_release - Handle close() system call for the HPT device.
+ * @inode: Pointer to the inode structure.
+ * @file: Pointer to the file structure.
+ *
+ * Cleans up resources associated with the device, including stopping
+ * the kernel thread and unregistering the netdevice. Returns 0 on success.
+ */
+static int hpt_release(struct inode *inode, struct file *file);
+
+/**
+ * hpt_allocate_buffers - Allocate DMA buffers for the HPT device.
+ * @hpt: Pointer to the hpt_dev structure.
+ *
+ * Allocates coherent DMA buffers and initializes associated metadata.
+ * Returns 0 on success or a negative error code on failure.
+ */
+static int hpt_allocate_buffers(struct hpt_dev *hpt);
+
+/**
+ * hpt_free_buffers - Free DMA buffers for the HPT device.
+ * @hpt: Pointer to the hpt_dev structure.
+ *
+ * Frees all previously allocated DMA buffers and cleans up associated
+ * resources.
+ */
 static void hpt_free_buffers(struct hpt_dev *hpt);
+
+/**
+ * hpt_mmap - Handle mmap() system call for the HPT device.
+ * @file: Pointer to the file structure.
+ * @vma: Pointer to the vm_area_struct structure.
+ *
+ * Maps a DMA buffer into user space memory. Validates buffer index
+ * and ensures the buffer is not already in use. Returns 0 on success
+ * or a negative error code on failure.
+ */
+static int hpt_mmap(struct file *file, struct vm_area_struct *vma);
+
+/**
+ * hpt_ioctl_create - Handle the creation of an HPT device.
+ * @file: Pointer to the file structure.
+ * @net: Pointer to the net namespace structure.
+ * @ioctl_num: IOCTL number.
+ * @ioctl_param: IOCTL parameter passed from user space.
+ *
+ * Creates and registers a new virtual network device with the specified
+ * configuration. Returns 0 on success or a negative error code on failure.
+ */
+static int hpt_ioctl_create(struct file *file, struct net *net,
+                            uint32_t ioctl_num, unsigned long ioctl_param);
+
+/**
+ * hpt_ioctl - Handle IOCTL system calls for the HPT device.
+ * @file: Pointer to the file structure.
+ * @ioctl_num: IOCTL number.
+ * @ioctl_param: IOCTL parameter passed from user space.
+ *
+ * Dispatches IOCTL requests based on their number. Returns the result
+ * of the corresponding IOCTL handler or -EINVAL for unsupported IOCTLs.
+ */
+static long hpt_ioctl(struct file *file, uint32_t ioctl_num,
+                      unsigned long ioctl_param);
+
+/**
+ * hpt_init - Initialize the HPT kernel module.
+ *
+ * Sets up the character device, allocates resources, and initializes
+ * the HPT device. Returns 0 on success or a negative error code on failure.
+ */
+static int __init hpt_init(void);
+
+/**
+ * hpt_exit - Cleanup the HPT kernel module.
+ *
+ * Frees all resources allocated during initialization, including DMA
+ * buffers, devices, and kernel structures.
+ */
+static void __exit hpt_exit(void);
+
+
+extern struct hpt_dev *hpt_device;
 
 static int hpt_kernel_thread(void *param)
 {
@@ -113,8 +227,6 @@ static int hpt_release(struct inode *inode, struct file *file)
 		unregister_netdevice(dev->net_dev);
 	}
 
-	hpt_free_buffers(dev);
-
 	pr_info("/dev/hpt closed\n");
 
 	rtnl_unlock();
@@ -123,13 +235,13 @@ static int hpt_release(struct inode *inode, struct file *file)
 
 static int hpt_allocate_buffers(struct hpt_dev *hpt)
 {
-	if(hpt->ring_buffer_items > HPT_BUFFER_COUNT)
+	/*if(hpt->ring_buffer_items > HPT_BUFFER_COUNT)
 	{
         pr_err("Too many elements for buffer'\n");
         return -EINVAL;
-    }
+    }*/
 
-    for (int i = 0; i < hpt->ring_buffer_items; i++) 
+    for (int i = 0; i < HPT_BUFFER_COUNT; i++) 
 	{
 		struct hpt_dma_buffer *buffer = &hpt->buffers[i];
 		buffer->data_combined = dma_alloc_coherent(&hpt->pdev->dev,
@@ -151,7 +263,7 @@ static int hpt_allocate_buffers(struct hpt_dev *hpt)
 static void hpt_free_buffers(struct hpt_dev *hpt)
 {
 	int i;
-	for (i = 0; i < hpt->ring_buffer_items; i++) 
+	for (i = 0; i < HPT_BUFFER_COUNT; i++) 
 	{
 		struct hpt_dma_buffer *buffer = &hpt->buffers[i];
 
@@ -172,7 +284,7 @@ static int hpt_mmap(struct file *file, struct vm_area_struct *vma)
 	struct hpt_dma_buffer *buffer = &dev->buffers[buffer_idx];
     unsigned long pfn = buffer->dma_handle >> PAGE_SHIFT;
 
-    if (buffer_idx >= HPT_BUFFER_COUNT) 
+    if (buffer_idx > HPT_BUFFER_COUNT) 
 	{
         pr_err("Invalid buffer index: %d\n", buffer_idx);
         return -EINVAL;
@@ -254,7 +366,7 @@ static int hpt_ioctl_create(struct file *file, struct net *net,
 
 	strncpy(hpt->name, net_dev_info.name, HPT_NAMESIZE);
 
-	if(net_dev_info.ring_buffer_items >= HPT_BUFFER_COUNT)
+	if(net_dev_info.ring_buffer_items > HPT_BUFFER_COUNT)
 	{
 		pr_err("Does not have enough space %zu\n", net_dev_info.ring_buffer_items);
 		goto clean_up;
@@ -278,14 +390,6 @@ static int hpt_ioctl_create(struct file *file, struct net *net,
 	init_waitqueue_head(&hpt->read_wait_queue);
 
 	net_dev->needs_free_netdev = true;
-
-	ret = hpt_allocate_buffers(hpt);
-	if (ret != 0) {
-		pr_err("Failed to allocate DMA buffer\n");
-        ret = -ENOMEM;
-		unregister_netdevice(net_dev);
-        goto clean_up;
-	}
 
 	ret = hpt_run_thread(hpt);
 	if (ret != 0) {
@@ -392,12 +496,20 @@ static int __init hpt_init(void)
         goto unregister_platform_device;
     }
 
+	ret = hpt_allocate_buffers(hpt_device);
+	if (ret != 0) {
+		pr_err("Failed to allocate DMA buffer\n");
+        ret = -ENOMEM;
+        goto destroy_device;
+	}
+
     pr_info("DMA buffer allocated successfully\n");
-    //mutex_init(&hpt_device->lock);
 
 	pr_info("Init HPT!\n");
     return 0;
 
+destroy_device:
+	device_destroy(hpt_device->class, hpt_device->devt);
 unregister_platform_device:
     platform_device_unregister(hpt_device->pdev);
 destroy_class:
@@ -414,12 +526,17 @@ free_hpt_device:
 
 static void __exit hpt_exit(void)
 {
-    device_destroy(hpt_device->class, hpt_device->devt);
-	platform_device_unregister(hpt_device->pdev);
-    class_destroy(hpt_device->class);
-    cdev_del(&hpt_device->cdev);
-    unregister_chrdev_region(hpt_device->devt, 1);
-    kfree(hpt_device);
+	if(hpt_device)
+	{
+		hpt_free_buffers(hpt_device);
+		device_destroy(hpt_device->class, hpt_device->devt);
+		platform_device_unregister(hpt_device->pdev);
+		class_destroy(hpt_device->class);
+		cdev_del(&hpt_device->cdev);
+		unregister_chrdev_region(hpt_device->devt, 1);
+		kfree(hpt_device);
+	}
+
 	pr_info("Exit HPT!\n");
 }
 

@@ -36,7 +36,7 @@
 #endif
 
 #define HPT_KTHREAD_RESCHEDULE_INTERVAL 0 /* us */
-#define HPT_BUFFER_COUNT 65535
+#define HPT_BUFFER_COUNT 8192
 #define HPT_BUFFER_SIZE 4096
 #define HPT_NUM_BUFFERS 1024
 //#define HPT_ALLOC_SIZE (HPT_BUFFER_SIZE * HPT_NUM_BUFFERS)
@@ -76,7 +76,6 @@ struct hpt_dev {
 	wait_queue_head_t tx_busy;
 };
 
-
 struct hpt_mod_info {
 	struct dentry *hmi_dbgfs_root;
 };
@@ -100,16 +99,13 @@ struct hpt_mod_info {
 #define	HPT_DBGFS_RX_RING_MEM_ERR	"rx_ring_memory_err"
 #define	HPT_DBGFS_RX_NETIF_DROP 	"rx_netif_drop"
 
-/**
- * This function will drain any packets that have been sent to us from userspace
- * and send them to the kernel for processing. It's called by the rx kernel
- * thread created in the core.
+/*
+ * Receives packets from the ring buffer and passes them to the network stack.
  */
 size_t hpt_net_rx(struct hpt_dev *hpt);
 
-/**
- * Initialize the network device for the tun, the structure responsible for actually
- * transferring packets (the character device is just used to communicate with userspace).
+/*
+ * Initializes the network device with the required settings and operations.
  */
 void hpt_net_init(struct net_device *dev);
 
