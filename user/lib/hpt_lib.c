@@ -53,22 +53,22 @@ void *map_buffers(int fd, int buffer_idx) {
 
 struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t num_ring_items)
 {
-    int ret;
-    struct hpt *dev = malloc(sizeof(struct hpt));
-
-    if(!dev) 
-    {
-        printf("Cannot allocate 'struct hpt'\n");
-        return NULL;
-    }
-
     if(num_ring_items > HPT_BUFFER_COUNT) 
     {
         printf("Too many elements for buffer'\n");
         return NULL;
     }
 
+    int ret;
+    struct hpt *dev;
     struct hpt_net_device_info net_dev_info;
+
+    dev = malloc(sizeof(struct hpt));
+    if(!dev) 
+    {
+        printf("Cannot allocate 'struct hpt'\n");
+        return NULL;
+    }
 
     memset(&net_dev_info, 0, sizeof(net_dev_info));
 	net_dev_info.ring_buffer_items = num_ring_items;
@@ -82,7 +82,6 @@ struct hpt *hpt_alloc(const char name[HPT_NAMESIZE], size_t num_ring_items)
 	}
 
     dev->ring_buffer_items = num_ring_items;
-
 
     for(int i = 0; i < num_ring_items; i++)
     {
@@ -128,12 +127,12 @@ void hpt_read(struct hpt *dev, hpt_buffer_t *buf)
             printf("tx_buffer is empty\n");
         }
 
-        if(!data_info->in_use || !data_info->ready_flag_tx) continue;
+        if(!ACQUIRE(&data_info->in_use)|| !ACQUIRE(&data_info->ready_flag_tx)) continue;
 
         if(data_info->size > (HPT_BUFFER_SIZE - sizeof(hpt_data_info_t)))
         {
             printf("Too big a packet for write\n");
-            data_info->ready_flag_tx = 0;
+            STORE(&data_info->ready_flag_tx, 0);
             continue;
         }
 
@@ -143,7 +142,7 @@ void hpt_read(struct hpt *dev, hpt_buffer_t *buf)
         {
             printf("%c", ((char *)data)[i]);
         }
-         data_info->ready_flag_tx = 0;
+        STORE(&data_info->ready_flag_tx, 0);
 
         printf("\n=========================\n");
     }
@@ -161,10 +160,10 @@ void hpt_write(struct hpt *dev, hpt_buffer_t *buf)
         struct hpt_dma_buffer *buffer = &dev->buffers[i];
         hpt_data_info_t *data_info = (hpt_data_info_t *)buffer->data_combined;
 
-        if(!data_info->in_use || data_info->ready_flag_rx) continue;
+        if(!ACQUIRE(&data_info->in_use)|| ACQUIRE(&data_info->ready_flag_rx)) continue;
 
         check_time(data_info);
-        data_info->ready_flag_rx = 1;
+        STORE(&data_info->ready_flag_rx, 1);
 
         break;
     }
@@ -206,7 +205,7 @@ int message(hpt_data_info_t *data_info)
     if(size > (HPT_BUFFER_SIZE - sizeof(hpt_data_info_t)))
     {
         printf("Too big a packet for write\n");
-        data_info->ready_flag_rx = 0;
+        STORE(&data_info->ready_flag_rx, 0);
         return -1;
     }
 
@@ -222,7 +221,7 @@ int message(hpt_data_info_t *data_info)
 int check_time(hpt_data_info_t *data_info)
 {
     struct timespec start, end;
-    uint32_t size = 1000;
+    uint32_t size = 1;
     uint32_t i = 0;
 
 	clock_gettime(CLOCK_MONOTONIC, &start);
@@ -231,7 +230,6 @@ int check_time(hpt_data_info_t *data_info)
 	{
         message(data_info);
 	}
-    //ioctl(fd, HPT_IOCTL_NOTIFY, NULL);
 	clock_gettime(CLOCK_MONOTONIC, &end);
 
     uint32_t time = (uint32_t)get_time_diff(start, end);

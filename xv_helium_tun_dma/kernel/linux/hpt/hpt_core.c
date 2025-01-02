@@ -29,21 +29,10 @@ static int hpt_kernel_thread(void *param)
 	pr_info("Kernel RX thread started!\n");
 	struct hpt_dev *dev = param;
 
-	/*while (!kthread_should_stop()) {
-		wait_event_interruptible(dev->read_wait_queue, dev->event_flag);
-		spin_lock(&dev->buffer_lock);
-		dev->event_flag = 0;
-		//STORE(&dev->event_flag, 0);
-		spin_unlock(&dev->buffer_lock);
-		hpt_net_rx(dev);
-	}*/
-
-
 	while (!kthread_should_stop()) 
 	{
 		hpt_net_rx(dev);
-		cpu_relax();
-		//ndelay(1000);
+		schedule();
     }
 
 	pr_info("Kernel RX thread stopped!\n");
@@ -121,7 +110,6 @@ static int hpt_release(struct inode *inode, struct file *file)
 
 	if(dev->net_dev != NULL)
 	{
-		pr_info("unregister_netdevice\n");
 		unregister_netdevice(dev->net_dev);
 	}
 
@@ -322,7 +310,6 @@ static long hpt_ioctl(struct file *file, uint32_t ioctl_num,
 {
 	int ret = -EINVAL;
 	struct net *net = NULL;
-	struct hpt_dev *hpt = file->private_data;
 
 	switch (_IOC_NR(ioctl_num)) {
 	case _IOC_NR(HPT_IOCTL_CREATE):
@@ -330,15 +317,6 @@ static long hpt_ioctl(struct file *file, uint32_t ioctl_num,
 		net = current->nsproxy->net_ns;
 		ret = hpt_ioctl_create(file, net, ioctl_num, ioctl_param);
 		rtnl_unlock();
-		break;
-	case _IOC_NR(HPT_IOCTL_NOTIFY):
-		spin_lock(&hpt->buffer_lock);
-		hpt->event_flag = 1;
-		//STORE(&hpt->event_flag, 1);
-		spin_unlock(&hpt->buffer_lock);
-
-		wake_up_interruptible(&hpt->read_wait_queue);
-		ret = 0;
 		break;
 	default:
 		pr_info("IOCTL default\n");
@@ -370,7 +348,7 @@ static int __init hpt_init(void)
     ret = alloc_chrdev_region(&hpt_device->devt, 0, 1, HPT_DEVICE);
     if (ret) {
         pr_err("Failed to allocate chrdev region\n");
-        goto err_free_dev;
+        goto free_hpt_device;
     }
 
     // Initialize character device
@@ -379,7 +357,7 @@ static int __init hpt_init(void)
     ret = cdev_add(&hpt_device->cdev, hpt_device->devt, 1);
     if (ret) {
         pr_err("Failed to add cdev\n");
-        goto err_unreg_chrdev;
+        goto unregister_chrdev_region;
     }
 
     // Create device class
@@ -387,36 +365,32 @@ static int __init hpt_init(void)
     if (IS_ERR(hpt_device->class)) {
         pr_err("Failed to create class\n");
         ret = PTR_ERR(hpt_device->class);
-        goto err_del_cdev;
+        goto del_cdev;
     }
 
     // Create parent platform device first
-    struct platform_device *pdev;
-    pdev = platform_device_register_simple(HPT_DEVICE, -1, NULL, 0);
-    if (IS_ERR(pdev)) {
+    hpt_device->pdev = platform_device_register_simple(HPT_DEVICE, -1, NULL, 0);
+    if (IS_ERR(hpt_device->pdev)) {
         pr_err("Failed to register platform device\n");
-        ret = PTR_ERR(pdev);
-        goto err_del_cdev;
+        ret = PTR_ERR(hpt_device->pdev);
+        goto destroy_class;
+    }
+
+	// Set DMA mask with parent device
+    ret = dma_set_mask_and_coherent(&hpt_device->pdev->dev, DMA_BIT_MASK(64));
+    if (ret) {
+        pr_err("Failed to set DMA mask\n");
+        goto unregister_platform_device;
     }
 
     // Create device with platform device as parent
-    hpt_device->device = device_create(hpt_device->class, &pdev->dev,
+    hpt_device->device = device_create(hpt_device->class, &hpt_device->pdev->dev,
                                       hpt_device->devt, NULL, HPT_DEVICE);
     if (IS_ERR(hpt_device->device)) {
         pr_err("Failed to create device\n");
         ret = PTR_ERR(hpt_device->device);
-        goto err_destroy_class;
+        goto unregister_platform_device;
     }
-
-    // Set DMA mask with parent device
-    ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
-    if (ret) {
-        pr_err("Failed to set DMA mask\n");
-        goto err_destroy_device;
-    }
-
-    // Store platform device
-    hpt_device->pdev = pdev;
 
     pr_info("DMA buffer allocated successfully\n");
     //mutex_init(&hpt_device->lock);
@@ -424,17 +398,15 @@ static int __init hpt_init(void)
 	pr_info("Init HPT!\n");
     return 0;
 
-err_destroy_device:
+unregister_platform_device:
     platform_device_unregister(hpt_device->pdev);
-    device_destroy(hpt_device->class, hpt_device->devt);
-err_destroy_class:
-    platform_device_unregister(hpt_device->pdev);
+destroy_class:
     class_destroy(hpt_device->class);
-err_del_cdev:
+del_cdev:
     cdev_del(&hpt_device->cdev);
-err_unreg_chrdev:
+unregister_chrdev_region:
     unregister_chrdev_region(hpt_device->devt, 1);
-err_free_dev:
+free_hpt_device:
     kfree(hpt_device);
     pr_err("Module initialization failed\n");
     return ret;
@@ -442,13 +414,8 @@ err_free_dev:
 
 static void __exit hpt_exit(void)
 {
-	/*if(hpt_device->buffer_base)
-	{
-		dma_free_coherent(hpt_device->device, HPT_ALLOC_SIZE * 2,
-                      hpt_device->buffer_base, hpt_device->dma_handle);
-	}*/
-    platform_device_unregister(hpt_device->pdev);
     device_destroy(hpt_device->class, hpt_device->devt);
+	platform_device_unregister(hpt_device->pdev);
     class_destroy(hpt_device->class);
     cdev_del(&hpt_device->cdev);
     unregister_chrdev_region(hpt_device->devt, 1);

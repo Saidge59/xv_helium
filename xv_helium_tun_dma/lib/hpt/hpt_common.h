@@ -224,6 +224,5 @@ static inline void hpt_rb_inc_read(struct hpt_ring_buffer *ring,
 #define HPT_DEVICE "hpt"
 
 #define HPT_IOCTL_CREATE _IOWR(0x92, 1, struct hpt_net_device_info)
-#define HPT_IOCTL_NOTIFY _IO(0x92, 2)
 
 #endif

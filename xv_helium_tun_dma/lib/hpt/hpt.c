@@ -194,6 +194,6 @@ void hpt_write(struct hpt *state, uint8_t *ip_pkt, size_t len)
 {
 	hpt_rb_tx(state->rx_ring, state->rb_size, state->rx_start, ip_pkt, len);
 	if (ACQUIRE(state->kthread_needs_wake)) {
-		ioctl(hpt_fd, HPT_IOCTL_NOTIFY, NULL);
+		//ioctl(hpt_fd, HPT_IOCTL_NOTIFY, NULL);
 	}
 }
